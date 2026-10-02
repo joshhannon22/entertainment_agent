@@ -110,7 +110,8 @@ Each numbered step is sized for one work session. Check it off when you can show
 
 **Goal:** be comfortable with the core objects before mixing in agent complexity.
 
-- [ ] Install Docker, kind, kubectl, helm, and k9s (k9s is optional but very helpful)
+- [x] Install Docker, kind, kubectl, helm, and k9s (k9s is optional but very helpful)
+  - Docker 29.1.3, kind 0.31.0, kubectl v1.35.0, helm v4.0.4 were already installed. Installed k9s v0.51.0 via `brew install derailed/k9s/k9s`.
 - [ ] `kind create cluster --config kind-config.yaml`. Then delete it and recreate it to get used to the cluster being disposable
 - [ ] Write a tiny FastAPI app with `/healthz` and `/hello`, then containerize it
 - [ ] Load the image into kind (`kind load docker-image`) and deploy with **raw YAML**: Deployment, Service, ConfigMap (greeting text), Secret (fake key)
