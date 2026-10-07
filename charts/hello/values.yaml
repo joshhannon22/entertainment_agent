@@ -10,7 +10,7 @@ service:
   targetPort: 8000
 
 config:
-  greeting: "Hello from the Helm ConfigMap!"
+  greeting: "Greeting v2 — changed via helm upgrade"
 
 secret:
   fakeApiKey: "super-secret-value-123"
