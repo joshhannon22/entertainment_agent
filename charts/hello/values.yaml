@@ -1,0 +1,24 @@
+replicaCount: 1
+
+image:
+  repository: hello
+  tag: v1
+  pullPolicy: IfNotPresent
+
+service:
+  port: 80
+  targetPort: 8000
+
+config:
+  greeting: "Hello from the Helm ConfigMap!"
+
+secret:
+  fakeApiKey: "super-secret-value-123"
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
