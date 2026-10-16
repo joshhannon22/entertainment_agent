@@ -56,7 +56,7 @@ if __name__ == "__main__":
         },
         {
             "role": "user",
-            "content": "Say hello in five words"
+            "content": "Say hello in six words"
         }
     ])
 
