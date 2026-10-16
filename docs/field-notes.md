@@ -42,3 +42,29 @@ CompletionUsage(completion_tokens=739, prompt_tokens=14, total_tokens=1504,
 **Workaround:** compute `thinking = total_tokens - prompt_tokens - completion_tokens` and bill it as output. Check this against the pricing docs and against AI Studio's usage dashboard.
 
 **Feature request:** populate `completion_tokens_details.reasoning_tokens` on the OpenAI-compatible endpoint so standard OpenAI-format cost tooling works without Gemini-specific maths.
+
+**Follow-up — `reasoning_effort=low` (same day):** with `REASONING_EFFORT=low` and the prompt "Say hello in five words", usage was `13 + 7 = 20`, so no hidden thinking at all. That's a big lever on cost and latency. The trade-off (possibly worse tool selection with less thinking) still needs to be measured in the Step 8 evals.
+
+---
+
+## 2026-10-15 — Thinking is non-deterministic, even at `reasoning_effort=low`
+
+**Phase:** 1, Step 1
+
+**What happened:** I ran a trivial prompt ("Say hello in six words") several times with `reasoning_effort=low`:
+
+| Run | prompt | completion | total | hidden thinking | latency |
+|---|---|---|---|---|---|
+| A | 13 | 8 | **378** | **357** | **1.61 s** |
+| B | 13 | 8 | 21 | 0 | 0.73 s |
+
+Same prompt, same settings. One run thought for ~357 tokens, the other didn't think at all. That's **18× the tokens and 2.2× the latency** on identical input. It first looked like going from "five words" to "six words" caused it. Running it again showed it didn't: the model decides on each request whether to think, and that decision varies from run to run.
+
+**Why it matters:**
+- **A single run tells you nothing about cost or latency.** Benchmarks need multiple runs and percentiles (p50/p95), not one sample. That applies to Step 6 metrics, Step 8 evals and `docs/benchmarks.md`.
+- **`reasoning_effort=low` is a hint, not a cap.** It doesn't guarantee zero thinking tokens. Cost estimates should use observed distributions, not best-case runs.
+- Lesson for debugging: change one thing, then **re-run before blaming the change**.
+
+**Workaround:** report cost/latency as averages and percentiles over N runs. Consider a hard cap via max tokens in Phase 6 guardrails.
+
+**Feature request:** expose a hard thinking-token budget through the OpenAI-compatible endpoint (and report reasoning tokens in `usage`, see above) so cost per request can be bounded.
