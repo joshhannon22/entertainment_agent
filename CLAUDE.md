@@ -34,7 +34,7 @@ When something we build maps directly to a line in one of these postings, say so
  
 That file is the source of truth for phases, scope and "done when" criteria.
  
-- **Where I am:** Phase 0 is complete. Phase 1 (hand-written ReAct loop on Gemini, plain Python, no framework) is in progress. Check the checkboxes in the plan for the exact step.
+- **Where I am:** Phase 0 is complete. Phase 1 (hand-written ReAct loop on Gemini, plain Python, no framework) is in progress. The plan's **"📍 WHERE WE LEFT OFF"** note at the top of Phase 1 is the exact resume point. Read it first; it's updated at the end of every session. As of 2026-10-18: Steps 0–2 are done, and the Step 3 manual round-trip works in `apps/agent-loop/agent/loop.py`, with two experiments (fake `tool_call_id`, dropped `thought_signature`) left before Step 4, the loop.
 - At the start of a session, if I don't say what I'm working on, look at the plan, tell me the next unchecked step, and confirm before diving in.
 - Respect the plan's scope discipline. If I drift toward the "Only if curious" list or into a later phase before the current "done when" is met, call it out once, then go with what I decide.
 - Product names (ADK, Vertex AI, the managed agent runtime) change often. When a step depends on a current API, model name or CLI flag, check the docs instead of trusting the plan's wording or your memory.

@@ -1,5 +1,4 @@
 import os
-from dotenv import load_dotenv
 import time
 from dataclasses import dataclass
 
@@ -48,18 +47,16 @@ class LLMClient:
         )
 
 if __name__ == "__main__":
-    load_dotenv()
+    # Example usage
     client = LLMClient()
     response = client.chat(messages=[
-        {   "role": "system",
-            "content": "You are a helpful assistant."
-        },
-        {
-            "role": "user",
-            "content": "Say hello in six words"
-        }
-    ])
-
-    print(response.response.choices[0].message.content)
-    print(response.response.usage)
-    print(f"Latency: {response.latency_s:.2f} s")
+            {   "role": "system",
+                "content": "You are a helpful assistant."
+            },
+            {
+                "role": "user",
+                "content": "Is Arcane finished, and where can I watch it?"
+            }
+        ]
+    )
+    print(response.response.choices[0])

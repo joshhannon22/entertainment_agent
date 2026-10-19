@@ -68,3 +68,45 @@ Same prompt, same settings. One run thought for ~357 tokens, the other didn't th
 **Workaround:** report cost/latency as averages and percentiles over N runs. Consider a hard cap via max tokens in Phase 6 guardrails.
 
 **Feature request:** expose a hard thinking-token budget through the OpenAI-compatible endpoint (and report reasoning tokens in `usage`, see above) so cost per request can be bounded.
+
+---
+
+## 2026-10-18 — Step 3: first manual tool-call round-trip (findings + Q&A)
+
+**Phase:** 1, Step 3 (`apps/agent-loop/agent/loop.py`, model `gemini-3.8-flash`, question "Is Arcane finished, and where can I watch it?")
+
+**What happened:** The round-trip worked end to end. Call 1 came back with `finish_reason='tool_calls'`, `content=None` and a single tool call: `search_tv_shows` with `arguments='{"query":"Arcane"}'`. I appended the assistant message (`msg.model_dump(exclude_none=True)`), ran the tool with `TOOLS[name](**json.loads(arguments))`, and appended a `role: "tool"` message with the matching `tool_call_id`. Call 2 returned `finish_reason='stop'` and a text answer: finished in November 2024, on Netflix.
+
+**Things I learned from the raw output:**
+- **`content=None` is normal on a tool-call turn.** The model sends a request *instead of* an answer, because it can't run code. `finish_reason` is the field the loop branches on: `"tool_calls"` means "run these and call me again", `"stop"` means "final answer".
+- **`arguments` is a JSON *string*, not a dict.** It needs `json.loads` before it can be unpacked with `**`.
+- **The `thought_signature` moved.** In Step 1 (no tools) it was on the message. On a tool-call turn it sits on **each tool call** (`ChatCompletionMessageFunctionToolCall.extra_content`). Building the assistant message by hand from `id`/`name`/`arguments` would silently drop it. `model_dump(exclude_none=True)` keeps it because it serializes nested fields.
+- **Grounding gap:** status and `where_to_watch` came from the TVMaze result. But the answer also said "other series set in the same League of Legends universe are in development", which isn't in any field my tool returns. It came from the model's training data. That's the same mechanism behind confident wrong answers, so Step 8 evals should check answers against the tool output.
+- **Readable output:** SDK objects are Pydantic models, so `choice.model_dump_json(indent=2, exclude_none=True)` prints them as clean JSON.
+
+**Q1: Why must the assistant's tool-call message go in *before* the tool result?**
+- *My answer:* "It needs to know which tool call the content is for, so it knows why it has the content."
+- *What was right / missing:* That's the right direction but incomplete. It leaves out the two actual mechanisms.
+- *Correct answer:*
+  1. **The model is stateless.** It doesn't remember asking for the tool. Every `chat` call sends the whole conversation again, and that `messages` list is the model's only memory. Without the assistant's tool-call message, a tool result shows up with no request before it.
+  2. **The API checks the structure.** By the OpenAI chat-completions spec, a `role: "tool"` message must answer a `tool_calls` entry in the assistant message right before it. Break that and the request typically fails with a 400 *before the model sees anything*.
+  3. **On Gemini specifically,** that assistant message also carries the `thought_signature`, the model's reasoning context for the request.
+
+**Q2: What breaks if `tool_call_id` doesn't match?**
+- *My answer:* "It would get an error that it wasn't found, and the agent would say something like it tried to call this and got an error."
+- *Why that's wrong:* It assumes the model sees the mismatch and talks about it. More likely the **API rejects the malformed request outright** and my Python code gets an exception, so the model never sees anything. The two outcomes are very different:
+
+  | What happens | Who handles it | Effect on the loop |
+  |---|---|---|
+  | My tool returns `{"error": ...}` | The model reasons about it and explains it to the user | Keeps running |
+  | The API rejects a malformed request (bad id, bad order) | My code gets an exception | Crashes unless caught |
+
+  The "agent explains the error" behavior only exists because I designed tools to return error dicts. Protocol mistakes in how I build `messages` are *my* bugs, and they show up as exceptions.
+- *Correct answer:* The `tool_call_id` is the key that links each result to the specific call that asked for it. That matters as soon as the model makes several tool calls in one turn. By the OpenAI spec, a mismatch is an invalid request (400).
+- **Gemini caveat, still to verify:** Gemini's *native* API matches function results by **name**, not by id, so the OpenAI-compat layer might tolerate or ignore a wrong id. If it does, that's a portability trap: code that works on Gemini would break on OpenAI/Azure.
+
+**Still to run (finishes Step 3):**
+- [ ] Set `tool_call_id` to a fake value (e.g. `"call_000"`) and record exactly what Gemini does.
+- [ ] Remove `extra_content` from the tool call in the appended assistant message and record whether Gemini rejects it (and the error text).
+
+**Feature request:** (pending the two experiments) document how the OpenAI-compat endpoint validates `tool_call_id` and missing signatures, and return explicit error messages for both.
