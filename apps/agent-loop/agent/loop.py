@@ -23,7 +23,7 @@ class AgentResult:
     messages: list[dict] = field(default_factory=list)     # full transcript, for debugging/evals
 
 def _run_tool_call(tool_call) -> dict:
-    """Run one tool call and return the JSON string to put in the tool message.
+    """Run one tool call and return the dictionary to put in the tool message.
 
     Never raises. Every failure becomes {"error": "..."} so the model can reason about it.
     """
@@ -80,20 +80,30 @@ def run_agent(client: llm.LLMClient, user_message: str, max_steps: int = DEFAULT
         if msg.tool_calls:
             for tool_call in msg.tool_calls:
                 tool_result = _run_tool_call(tool_call)
+                content = json.dumps(tool_result, ensure_ascii=False)
+                print(f"[tool] {tool_call.function.name}({tool_call.function.arguments}) -> {content[:200]}")
                 result.tool_calls.append({
                     "name": tool_call.function.name,
                     "args": tool_call.function.arguments,
-                    "error": isinstance(tool_result, dict) and "error" in tool_result
+                    "error": "error" in tool_result,
                 })
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call.id,
-                    "content": json.dumps(tool_result, ensure_ascii=False)
+                    "content": content
                 })
         else:
-            result.answer = msg.content
-            result.stop_reason = choice.finish_reason or "stop"
-            return result   # we have an answer, stop the loop
+            if msg.content:
+                result.answer = msg.content
+                result.stop_reason = choice.finish_reason or "stop"
+            else:
+                # Turn ended with no text and no tool calls: not a success.
+                # Keep a meaningful finish_reason (e.g. "length" = thinking used the budget).
+                result.stop_reason = (
+                    choice.finish_reason if choice.finish_reason not in (None, "stop")
+                    else "empty_response"
+                )
+            return result
             
     return result   # only reached if we ran out of steps
 
@@ -103,11 +113,12 @@ if __name__ == "__main__":
     client = llm.LLMClient()
     # (label, question, max_steps): one per exit path of the loop
     smoke_tests = [
-        ("happy path",       "Is Arcane finished, and where can I watch it?", DEFAULT_MAX_STEPS),
-        ("step cap",         "Is Arcane finished?", 1),
-        ("parallel tools",   "Are Arcane and Severance both finished, and where can I watch each?", DEFAULT_MAX_STEPS),
-        ("not found",        "Where can I watch The Zorblax Saga?", DEFAULT_MAX_STEPS),
-        ("content filter",   "Where can I watch The Glorbnax Chronicles?", DEFAULT_MAX_STEPS),
+        # ("happy path",       "Is Arcane finished, and where can I watch it?", DEFAULT_MAX_STEPS),
+        # ("step cap",         "Is Arcane finished?", 1),
+        # ("parallel tools",   "Are Arcane and Severance both finished, and where can I watch each?", DEFAULT_MAX_STEPS),
+        # ("not found",        "Where can I watch The Zorblax Saga?", DEFAULT_MAX_STEPS),
+        # ("content filter",   "Where can I watch The Glorbnax Chronicles?", DEFAULT_MAX_STEPS),
+        ("co-op games",      "Find me a cheap co-op game to play tonight.", DEFAULT_MAX_STEPS),
     ]
 
     for label, question, max_steps in smoke_tests:
