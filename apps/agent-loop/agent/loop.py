@@ -1,5 +1,6 @@
-from dotenv import load_dotenv
 import json
+
+from dotenv import load_dotenv
 
 from tools import TOOL_SCHEMAS, TOOLS
 import llm
@@ -20,10 +21,19 @@ if __name__ == "__main__":
     # append tool call message to the messages lists
     msg = response.response.choices[0].message
     messages.append(msg.model_dump(exclude_none=True))
-    # parse arguments to a dict
-    args = json.loads(msg.tool_calls[0].function.arguments)
-    # create new message with function return and append to messages
-    messages.append({"role": "tool", "tool_call_id": msg.tool_calls[0].id, "content": json.dumps(TOOLS[msg.tool_calls[0].function.name](**args),ensure_ascii=False)})
+    tool_call = msg.tool_calls[0]
+    name = tool_call.function.name
+    args = json.loads(tool_call.function.arguments)   # arguments is a JSON *string*
+    
+    fn = TOOLS[name]          # KeyError here = model asked for a tool we don't have
+    result = fn(**args)       # TypeError here = model sent bad/missing args
+    print(f"[tool] {name}({args}) -> {json.dumps(result, ensure_ascii=False)[:200]}")
+
+    messages.append({
+        "role": "tool",
+        "tool_call_id": tool_call.id,
+        "content": json.dumps(result, ensure_ascii=False),
+    })
     # Call client chat again to print with new updates
     response = client.chat(messages=messages, tools=TOOL_SCHEMAS)
     print(response.response.choices[0].model_dump_json(indent=2))

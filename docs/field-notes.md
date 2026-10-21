@@ -105,8 +105,18 @@ Same prompt, same settings. One run thought for ~357 tokens, the other didn't th
 - *Correct answer:* The `tool_call_id` is the key that links each result to the specific call that asked for it. That matters as soon as the model makes several tool calls in one turn. By the OpenAI spec, a mismatch is an invalid request (400).
 - **Gemini caveat, still to verify:** Gemini's *native* API matches function results by **name**, not by id, so the OpenAI-compat layer might tolerate or ignore a wrong id. If it does, that's a portability trap: code that works on Gemini would break on OpenAI/Azure.
 
-**Still to run (finishes Step 3):**
-- [ ] Set `tool_call_id` to a fake value (e.g. `"call_000"`) and record exactly what Gemini does.
-- [ ] Remove `extra_content` from the tool call in the appended assistant message and record whether Gemini rejects it (and the error text).
+**Experiments (run 2026-10-20, finishes Step 3):**
 
-**Feature request:** (pending the two experiments) document how the OpenAI-compat endpoint validates `tool_call_id` and missing signatures, and return explicit error messages for both.
+- **Accidental experiment 0: assistant message missing entirely.** While refactoring, I dropped the `messages.append(msg.model_dump(...))` line, so a `role: "tool"` message followed the user message directly. Result: `400 INVALID_ARGUMENT` — `GenerateContentRequest.contents[1].parts[0].function_response.name: Name cannot be empty.`
+  - `GenerateContentRequest` is Gemini's **native** request type: the compat endpoint translates OpenAI-shaped messages into a native request *before* validating.
+  - `system` isn't in `contents` (it becomes `system_instruction`), so `contents[1]` was the tool message.
+  - OpenAI's tool result carries a `tool_call_id` and no name; Gemini's `functionResponse` needs a `name` and has no id. The translator resolves the name by finding the assistant `tool_calls[i]` whose `id` matches. No assistant message → no match → empty name.
+- **Experiment 1: fake `tool_call_id` (`"call_000"`), assistant message present.** Result: the **same** error, one slot later — `contents[2].parts[0].function_response.name: Name cannot be empty.` (`[0]` user, `[1]` assistant `functionCall`, `[2]` tool result.) So Gemini does not ignore the id; it's the join key. But a bad id is reported as its *side effect* (empty name), not as "unknown tool_call_id". A missing assistant message and a wrong id give the same message; only the index differs.
+- **Experiment 2: `thought_signature` removed.** Dumped the assistant message with `msg.model_dump(exclude_none=True, exclude={"tool_calls": {"__all__": {"extra_content"}}})` (Pydantic nested exclude; `"__all__"` applies to every item in the list). Result: `400 INVALID_ARGUMENT` — `Function call is missing a thought_signature in functionCall parts. This is required for tools to work correctly ... function call 'default_api:search_tv_shows', position 2.` This one is explicit and links to the docs. Tools are namespaced as `default_api:` internally by the compat layer.
+
+**Key lessons:**
+- Protocol mistakes in how I build `messages` surface as **exceptions in my code**; the model never sees them. Confirms the Q2 correction above.
+- The assistant tool-call message must be appended **as returned** (`model_dump(exclude_none=True)`), never rebuilt by hand from `id`/`name`/`arguments`. This matters again in Phase 6: if session state is persisted to Postgres with only the standard OpenAI fields, resumed conversations on Gemini 3 will 400.
+- Error text is provider-specific even when the rule is the same, so don't key error handling on message strings.
+
+**Feature request:** the OpenAI-compat endpoint should validate `tool_call_id` directly and say so ("tool message `call_000` does not match any tool_call in the preceding assistant message"), instead of reporting the downstream symptom `function_response.name: Name cannot be empty`. The thought-signature error is the model to copy: it names the field, the function, the position and links to docs.
