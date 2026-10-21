@@ -120,3 +120,17 @@ Same prompt, same settings. One run thought for ~357 tokens, the other didn't th
 - Error text is provider-specific even when the rule is the same, so don't key error handling on message strings.
 
 **Feature request:** the OpenAI-compat endpoint should validate `tool_call_id` directly and say so ("tool message `call_000` does not match any tool_call in the preceding assistant message"), instead of reporting the downstream symptom `function_response.name: Name cannot be empty`. The thought-signature error is the model to copy: it names the field, the function, the position and links to docs.
+
+## 2026-10-20 — Step 4: the ReAct loop, smoke-tested on every exit path
+
+**Phase:** 1, Step 4 (`run_agent` in `apps/agent-loop/agent/loop.py`, model `gemini-3.8-flash`). Five smoke tests in `__main__`, one per exit path: happy path, `max_steps=1` cap, two shows in one question, unknown title, and a content-filtered request.
+
+**Findings:**
+- **Gemini sends parallel tool calls.** "Are Arcane and Severance both finished...?" → `steps=2` with **two** `search_tv_shows` calls in a single assistant turn. One assistant message, then one `role: "tool"` message per call, each with its own `tool_call_id`. Two lookups cost one LLM round-trip, not two. That's relevant to the Phase 3b router design.
+- **False-positive safety block.** "Where can I watch The Glorbnax Chronicles?" was blocked on the **first** call, before any tool ran: the choice came back with `message=None`, `finish_reason="content_filter: PROHIBITED_CONTENT"` and zero usage. "The Zorblax Saga" and "Blorptastic" went through and correctly returned "not found", so the trigger is specific to that token, not to made-up titles in general. Reproducible across runs.
+- **`finish_reason` isn't the standard string.** OpenAI's spec says `"content_filter"`; Gemini's compat layer appends the native reason: `"content_filter: PROHIBITED_CONTENT"`. `== "content_filter"` would never match. Use `startswith`, or store the raw value (what `AgentResult.stop_reason` does now).
+- **A first guard turned a crash into a retry loop.** Wrapping the body in `if msg:` stopped the `AttributeError` but fell through and re-sent identical `messages` six times (`steps=6`), and because the latency/usage lines had moved inside the `if`, it reported `latency 0.0` for six real calls. Fix: a no-message response is **terminal** (guard clause, return with the real `finish_reason`), and accounting runs for **every** call, whatever the outcome.
+- **Grounding drift.** Arcane's answer added "the creators always intended it as a two-season story" in all four runs (not in any tool field). Severance once got "Season 2 premieres January 2025", stale by 21 months, because TVMaze only said `Running` and the model filled in the rest from training data; the next run said something different. Consistent ungrounded claims are the more dangerous kind: one spot check would pass them. Candidate mitigations for Step 8: put today's date in the system prompt; replace "don't guess" with "only state facts present in tool results".
+- `hidden_thinking=0` on all calls this session, vs 751 on one call on 10-18. Same model and config. More evidence that cost needs percentiles over N runs.
+
+**Feature request:** when the compat endpoint blocks a request (`content_filter: PROHIBITED_CONTENT`), return *which* part of the input triggered it, or at least a category. Right now a fictional show title can't be told apart from a real policy violation, and a customer can't tune around false positives they can't see.

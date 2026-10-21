@@ -22,7 +22,7 @@ class AgentResult:
     tool_calls: list[dict] = field(default_factory=list)   # [{"name":..., "args":..., "error": bool}]
     messages: list[dict] = field(default_factory=list)     # full transcript, for debugging/evals
 
-def _run_tool_call(tool_call) -> str:
+def _run_tool_call(tool_call) -> dict:
     """Run one tool call and return the JSON string to put in the tool message.
 
     Never raises. Every failure becomes {"error": "..."} so the model can reason about it.
@@ -60,17 +60,23 @@ def run_agent(client: llm.LLMClient, user_message: str, max_steps: int = DEFAULT
 
     for step in range(max_steps):
         chat = client.chat(messages=messages, tools=TOOL_SCHEMAS)
-        breakpoint()
-        result.steps += 1
         result.llm_latency_s += chat.latency_s
-        
         usage = chat.response.usage
+        result.steps += 1
+        choice = chat.response.choices[0]
+        msg = choice.message
+        
         if usage:
             result.prompt_tokens += usage.prompt_tokens
             result.completion_tokens += usage.completion_tokens
             result.total_tokens += usage.total_tokens
-        choice = chat.response.choices[0]
-        msg = choice.message
+        
+        if msg is None:
+            result.stop_reason = choice.finish_reason or "no_message"
+            return result   # no message returned, stop the loop
+            
+        result.messages.append(msg.model_dump(exclude_none=True))  # exclude_nones to avoid cluttering with null tool_calls
+        
         if msg.tool_calls:
             for tool_call in msg.tool_calls:
                 tool_result = _run_tool_call(tool_call)
@@ -79,8 +85,11 @@ def run_agent(client: llm.LLMClient, user_message: str, max_steps: int = DEFAULT
                     "args": tool_call.function.arguments,
                     "error": isinstance(tool_result, dict) and "error" in tool_result
                 })
-                messages.append({"role": "tool", "content": json.dumps(tool_result)})
-
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": json.dumps(tool_result, ensure_ascii=False)
+                })
         else:
             result.answer = msg.content
             result.stop_reason = choice.finish_reason or "stop"
@@ -92,13 +101,21 @@ def run_agent(client: llm.LLMClient, user_message: str, max_steps: int = DEFAULT
 if __name__ == "__main__":
     load_dotenv()
     client = llm.LLMClient()
-    r = run_agent(client, "Is Arcane finished, and where can I watch it?")
-    # TODO: print answer, stop_reason, steps, tokens, latency, tool_calls
-    print(f"Answer: {r.answer}")
-    print(f"Stop reason: {r.stop_reason}")
-    print(f"Steps: {r.steps}")
-    print(f"Prompt tokens: {r.prompt_tokens}")
-    print(f"Completion tokens: {r.completion_tokens}")
-    print(f"Total tokens: {r.total_tokens}")
-    print(f"LLM latency (s): {r.llm_latency_s}")
-    print(f"Tool calls: {r.tool_calls}")
+    # (label, question, max_steps): one per exit path of the loop
+    smoke_tests = [
+        ("happy path",       "Is Arcane finished, and where can I watch it?", DEFAULT_MAX_STEPS),
+        ("step cap",         "Is Arcane finished?", 1),
+        ("parallel tools",   "Are Arcane and Severance both finished, and where can I watch each?", DEFAULT_MAX_STEPS),
+        ("not found",        "Where can I watch The Zorblax Saga?", DEFAULT_MAX_STEPS),
+        ("content filter",   "Where can I watch The Glorbnax Chronicles?", DEFAULT_MAX_STEPS),
+    ]
+
+    for label, question, max_steps in smoke_tests:
+        r = run_agent(client, question, max_steps=max_steps)
+        hidden = r.total_tokens - r.prompt_tokens - r.completion_tokens
+        print(f"\n=== {label}: {question}")
+        print(f"Answer: {r.answer}")
+        print(f"stop={r.stop_reason}  steps={r.steps}  latency={r.llm_latency_s:.2f}s")
+        print(f"tokens: prompt={r.prompt_tokens} completion={r.completion_tokens} "
+              f"hidden_thinking={hidden} total={r.total_tokens}")
+        print(f"tools: {[(t['name'], t['args'], 'ERR' if t['error'] else 'ok') for t in r.tool_calls]}")
