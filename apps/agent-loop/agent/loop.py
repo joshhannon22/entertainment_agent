@@ -118,7 +118,8 @@ if __name__ == "__main__":
         # ("parallel tools",   "Are Arcane and Severance both finished, and where can I watch each?", DEFAULT_MAX_STEPS),
         # ("not found",        "Where can I watch The Zorblax Saga?", DEFAULT_MAX_STEPS),
         # ("content filter",   "Where can I watch The Glorbnax Chronicles?", DEFAULT_MAX_STEPS),
-        ("co-op games",      "Find me a cheap co-op game to play tonight.", DEFAULT_MAX_STEPS),
+        # ("co-op games",      "Find me a cheap co-op game to play tonight.", DEFAULT_MAX_STEPS),
+        ("three tools",      "I've got a free evening: find me a cheap co-op game, a show to watch after, and a short sci-fi book for the weekend.", DEFAULT_MAX_STEPS),
     ]
 
     for label, question, max_steps in smoke_tests:

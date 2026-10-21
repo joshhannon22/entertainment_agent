@@ -134,3 +134,24 @@ Same prompt, same settings. One run thought for ~357 tokens, the other didn't th
 - `hidden_thinking=0` on all calls this session, vs 751 on one call on 10-18. Same model and config. More evidence that cost needs percentiles over N runs.
 
 **Feature request:** when the compat endpoint blocks a request (`content_filter: PROHIBITED_CONTENT`), return *which* part of the input triggered it, or at least a category. Right now a fictional show title can't be told apart from a real policy violation, and a customer can't tune around false positives they can't see.
+
+---
+
+## 2026-10-21: Step 5, CheapShark and Open Library (and what the schema description actually controls)
+
+**Phase:** 1, Step 5 (`find_game_deals` and `search_books` in `apps/agent-loop/agent/tools.py`)
+
+**What happened:**
+- **CheapShark needs an undocumented User-Agent.** The first `curl` returned `HTTP 400` with `{"error": "Missing or generic User-Agent header detected. Please identify your client with a descriptive User-Agent (e.g., 'MyApp/1.0 (contact@example.com)')."}`. curl's `curl/8.7.1` and httpx's `python-httpx/x` both count as generic. The plan's API table said "auth: none". Workaround: one shared `HEADERS = {"User-Agent": "WatchParty/0.1 (+<repo url>)"}` sent by every tool. Use a repo URL rather than an email, because the code is public.
+- **CheapShark latency spikes to about 10 s.** Identical requests took 0.10 / 0.11 / 0.17 s, then 10.19 s, right at `TIMEOUT_S = 10`. One smoke test hit the timeout. The tool returned its error dict as designed. Retries with backoff are Phase 3.
+- **CheapShark sends every number as a string** (`"salePrice": "0.89"`, `"savings": "91.091091"`, `"isOnSale": "0"`), and `"0"` means "missing". `bool("0")` is `True`, which makes this an easy trap.
+- **Open Library hides useful fields by default.** `search.json` returns no ratings, page count or subjects unless you ask for them with `fields=`. Missing values are left out rather than sent as `null`.
+- **Open Library results are mostly noise for popular books.** For "Project Hail Mary", 4 of 5 results were "SUMMARY and REVIEW"-style knockoffs or an omnibus. `edition_count` separates them (32 vs 1). An omnibus with one review shows a 5.0 rating.
+- **Invented price history.** In the three-tool smoke test, the answer said Portal 2 "routinely drops to around $1–2 during sales", right next to the real tool price ($9.99). The tool has no price history. This is worse than an ungrounded "it's co-op", because it's a fabricated fact in the tool's own domain. Step 8 eval case: every price in the answer must appear in a tool result. Prompt fix to try: "only state prices, dates, ratings and availability that appear in a tool result."
+- **Vague vs precise schema, measured.** Same question ("Find me a cheap co-op game to play tonight."), with only the `find_game_deals` descriptions changed (in memory, by mutating the schema dict):
+  - **Precise:** the model named 5 specific titles, made parallel calls, never set `max_price`, and filtered "cheap" on real prices.
+  - **Vague** ("Finds game deals." / "The search term." / "Max price."): `title="co-op"`, then invented `max_price=10` and `15`. It Takes Two came back `count: 0` because of the invented filter (a silent false negative). The answer recommended games *with "CO-OP" in their names*.
+
+**Key lesson:** an API without the data the user's question needs (CheapShark has no genre or co-op info) can be worked around in the schema description, by telling the model *how* to use the tool, not just what it is. The trade-off is that the "fits the request" part of the answer is now the model's own knowledge and isn't grounded, so evals have to treat it separately.
+
+**Feature request (CheapShark):** document the User-Agent requirement on the API docs page and return it with a `403`/`400` plus a docs link, not only in the body. Return numbers as JSON numbers. **(Gemini compat):** nothing new this step.

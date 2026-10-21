@@ -21,6 +21,10 @@ CHEAPSHARK_PAGE_SIZE = 20   # fetch more than MAX_RESULTS: dedupe by game shrink
 
 _store_names: dict[str, str] | None = None   # filled on first successful /stores call
 
+# ── Open Library ─────────────────────────────────────────
+OPENLIBRARY_SEARCH_URL = "https://openlibrary.org/search.json"
+OPENLIBRARY_FIELDS = "title,author_name,first_publish_year,edition_count,number_of_pages_median,ratings_average,ratings_count,subject"
+MAX_SUBJECTS = 5
 
 # ── Helpers ──────────────────────────────────────────────
 def _strip_html(text: str | None) -> str:
@@ -229,15 +233,97 @@ FIND_GAME_DEALS_SCHEMA = {
 }
 
 
+# ── Tool: search_books ────────────────────────────────
+def search_books(query: str) -> dict:
+    """Book search on Open Library by title or author. Never raises."""
+    params = {"q": query, "limit": MAX_RESULTS, "fields": OPENLIBRARY_FIELDS}  # fields= : the server trims for us
+
+    try:
+        resp = httpx.get(OPENLIBRARY_SEARCH_URL, params=params, headers=HEADERS, timeout=TIMEOUT_S)
+        resp.raise_for_status()
+    except httpx.TimeoutException:
+        return {"error": "Open Library timed out. Try again or answer without book details."}
+    except httpx.HTTPStatusError as e:
+        print(f"[openlibrary] HTTP {e.response.status_code}: {e.response.text[:200]}")
+        return {"error": f"Open Library returned HTTP {e.response.status_code}. Answer without book details."}
+    except httpx.RequestError as e:
+        return {"error": f"Open Library is unreachable ({type(e).__name__}). Answer without book details."}
+
+    try:
+        data = resp.json()
+    except ValueError:
+        return {"error": "Open Library returned an unexpected (non-JSON) response."}
+    if not isinstance(data, dict):
+        print(f"[openlibrary] unexpected payload: {str(data)[:200]}")
+        return {"error": "Open Library returned an unexpected response. Answer without book details."}
+
+    results = []
+    for doc in data.get("docs", []):
+        rating = doc.get("ratings_average")
+        subjects = [s for s in doc.get("subject", []) if ":" not in s][:MAX_SUBJECTS]  # drop tags like "nyt:..."
+        results.append({
+            "title": doc.get("title"),
+            "authors": doc.get("author_name", []),
+            "first_published": doc.get("first_publish_year"),
+            "editions": doc.get("edition_count"),
+            "pages": doc.get("number_of_pages_median"),
+            "rating": round(rating, 1) if rating is not None else None,
+            "rating_count": doc.get("ratings_count", 0),
+            "subjects": subjects,
+        })
+
+    return {"query": query, "count": len(results), "results": results}
+
+
+SEARCH_BOOKS_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "search_books",
+        "description": (
+            "Look up books by title or author on Open Library. "
+            "Results can include summaries, study guides, and omnibus/box-set editions alongside the real book; "
+            "prefer the result whose title and author match and that has many editions (a summary or knockoff "
+            "usually has 1). "
+            f"Returns up to {MAX_RESULTS} books, each with: title, authors, first_published (year), "
+            "editions (number of published editions, a rough popularity signal), pages (median page count, "
+            "may be null), rating (1-5, null if unrated), rating_count, and up to "
+            f"{MAX_SUBJECTS} subject tags. "
+            "Use this when the user names a book or an author, or wants details about one: "
+            "how long it is, when it came out, how it's rated, what it's about. "
+            "Do NOT use it to find books by genre, mood, or similarity (e.g. 'cozy mysteries', "
+            "'books like Dune'). It only matches titles and author names. "
+            "It has no prices, availability, or audiobook information."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "A book title or author name, e.g. 'Project Hail Mary' or 'Andy Weir'. "
+                        "Not a genre, mood, or description."
+                    ),
+                }
+            },
+            "required": ["query"],
+        },
+    },
+}
+
+
+
+
 # ── Registry ─────────────────────────────────────────────
 TOOLS = {
     "search_tv_shows": search_tv_shows,
     "find_game_deals": find_game_deals,
+    "search_books": search_books
 }
 
 TOOL_SCHEMAS = [
     SEARCH_TV_SHOWS_SCHEMA,
     FIND_GAME_DEALS_SCHEMA,
+    SEARCH_BOOKS_SCHEMA,
 ]
 
 
@@ -249,6 +335,9 @@ if __name__ == "__main__":
         ("games: dedupe",        find_game_deals,  {"title": "overcooked"}),        # expect each game once, cheapest store
         ("games: price cap",     find_game_deals,  {"title": "stardew", "max_price": 5}),
         ("games: not found",     find_game_deals,  {"title": "zzqxblorp"}),
+        ("books: by title",      search_books,     {"query": "Project Hail Mary"}),  # expect knockoffs with editions=1
+        ("books: by author",     search_books,     {"query": "Andy Weir"}),
+        ("books: not found",     search_books,     {"query": "zzqxblorp"}),
     ]
     for label, fn, kwargs in smoke_tests:
         print(f"\n=== {label}: {fn.__name__}({kwargs})")
