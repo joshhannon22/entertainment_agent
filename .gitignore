@@ -2,3 +2,4 @@
 .env
 *secret*.yaml
 __pycache__/
+.adk/

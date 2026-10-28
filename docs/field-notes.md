@@ -169,3 +169,18 @@ Same prompt, same settings. One run thought for ~357 tokens, the other didn't th
 - **Root-logger trap:** `logging.basicConfig(level=INFO)` turned on httpx's request logging too.
 
 **Feature request (Gemini compat):** return a cost or billable-token breakdown in `usage` (`completion_tokens_details.reasoning_tokens`, as the OpenAI spec allows) instead of leaving thinking tokens implicit in `total_tokens`. Every customer who builds a cost dashboard has to rediscover the subtraction.
+
+---
+
+## 2026-10-27: Phase 1b, first ADK run
+
+**What happened:**
+- **The native API reports thinking tokens; the OpenAI-compatible one didn't.** ADK's event JSON has `usageMetadata.thoughtsTokenCount` (camelCase in the dev UI JSON, `usage_metadata.thoughts_token_count` in Python). In Phase 1 we had to compute them as `total − prompt − completion`. Choosing the OpenAI-compatible endpoint for portability cost us cost visibility.
+- **ADK's default step cap is 500 LLM calls** (`RunConfig.max_llm_calls`, overridable with `ADK_MAX_LLM_CALLS`). My loop used 6. A tool-calling loop that never ends would run up 500 billed calls before stopping. Set it explicitly.
+- **String instructions are templates.** `{name}` in `Agent(instruction="...")` is replaced from session state, so a literal brace or an unset key breaks the prompt. Passing a function (`instruction=build_instruction`) avoids the templating and lets the date be computed per turn.
+- **Docstrings can't be f-strings.** ADK reads tool descriptions from `__doc__`, and an f-string as the first statement isn't a docstring, so `__doc__` would be `None` and the tool would ship with no description, silently.
+- **`__init__.py` runs on any import from the package.** `from . import agent` before `agent.py` existed broke `python -m watch_party.tools` with a misleading "consider renaming" hint.
+- `adk web` persisted sessions to `watch_party/.adk/session.db` by default, so `.adk/` needs to be in `.gitignore`.
+- The first `adk run` prompts to opt in to telemetry (default shown as `[Y/n]`, while the text says "OFF by default").
+
+**Feature request (ADK):** show `max_llm_calls` and the session backend in the `adk run`/`adk web` startup banner, and warn when a string instruction contains `{...}` placeholders that aren't in state at agent load time, instead of at request time.

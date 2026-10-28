@@ -333,12 +333,17 @@ Each numbered step is sized for one work session. Check it off when you can show
 
 **Goal:** move onto the agent SDK the Google roles name, and see exactly what it does for you compared to your own loop.
 
-> **📍 WHERE WE LEFT OFF (2026-10-27): Phase 1 complete. Start Phase 1b.**
-> Next session: write `docs/discovery/phase-1b.md` (half a page), check the current ADK docs (package name, `adk web`/`adk run`/`adk eval` CLI), then port the three tools into an ADK `Agent` in `apps/agent-api/`. Optional first: run the evals on `gemini-3.5-flash-lite` and pick the default model on the numbers.
+> **📍 WHERE WE LEFT OFF (2026-10-27): Phase 1b steps 1–3 done (ADK agent runs in `adk run`/`adk web`; events and state mapped; state paragraph written). Next: convert `evals/questions.yaml` to an ADK evalset and run `adk eval`.**
+> The user types all code from Phase 1b on (Claude shows the blocks). Run from `apps/agent-api`: `adk run watch_party` / `adk web --port 8000`.
 
-- [ ] Port the three tools into an ADK `Agent` (ADK builds the tool schema from type hints and docstrings — compare that to your hand-written JSON schemas)
-- [ ] Run it with `adk web` and `adk run`. Step through the dev UI's event/trace view and map each event to a step in your Phase 1 loop
-- [ ] Look at how ADK represents **sessions, state and events**. Write one paragraph on where your hand-written loop kept state vs where ADK keeps it — this is the "state management" the posting keeps mentioning
+- [x] Port the three tools into an ADK `Agent` (ADK builds the tool schema from type hints and docstrings — compare that to your hand-written JSON schemas)
+  - `apps/agent-api/watch_party/{__init__.py, agent.py, tools.py, .env}`, `google-adk==2.13.0`. `tools.py` is a copy of the Phase 1 file with each `*_SCHEMA` description moved into the function's docstring (`Args:` section → parameter descriptions) and the registry deleted. `Agent(tools=[...])` *is* the registry. The duplication is temporary, because both copies go away when the tools move to MCP in Phase 3.
+  - Gotchas: docstrings can't be f-strings (`__doc__` becomes `None` and the tool silently has no description); `{...}` in a string `instruction` is session-state templating, so the instruction is a function; the default step cap is 500 LLM calls, so `ADK_MAX_LLM_CALLS=6` goes in `.env`; `.env` uses `GOOGLE_API_KEY` + `GOOGLE_GENAI_USE_VERTEXAI=FALSE` (the Phase 7 switch).
+- [x] Run it with `adk web` and `adk run`. Step through the dev UI's event/trace view and map each event to a step in your Phase 1 loop
+  - The events map one-to-one onto the Phase 1 `messages` list: user → `function_call` (= assistant `tool_calls`, parallel) → `function_response` (= `role: tool`) → text. Turn 2 of a session answered a follow-up without restating the show, made 4 parallel `search_books` calls with titles it chose itself (the docstring strategy), then a 5th after seeing the results (ReAct).
+  - The native API exposes `usage_metadata.thoughts_token_count`, which the OpenAI-compatible endpoint hid. Cost per request in ADK comes from the events' `usage_metadata`.
+- [x] Look at how ADK represents **sessions, state and events**. Write one paragraph on where your hand-written loop kept state vs where ADK keeps it — this is the "state management" the posting keeps mentioning
+  - Written as `docs/decisions.md` → "Where state lives: hand-written loop vs ADK sessions". Short version: events = the stored `messages` list (this is what memory comes from); state = a deliberate key-value scratchpad scoped by `user:`/`app:`/`temp:` prefixes (empty for us, so the State tab was blank); SessionService = where it's stored (in memory / SQLite / DB / Vertex AI).
 - [ ] Convert `evals/questions.yaml` into an ADK evalset and run `adk eval`. Keep your own script too, and note what each catches that the other doesn't
 - [ ] Keep `apps/agent-loop/` as a reference. From here on, `agent-api` is the ADK version
 - [ ] *FDE habit:* 5-minute recorded demo of both versions side by side, and the first entries in `docs/field-notes.md`
