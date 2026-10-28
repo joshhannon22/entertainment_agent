@@ -7,7 +7,7 @@ import httpx
 # ── Shared ───────────────────────────────────────────────
 MAX_RESULTS = 5          # enough to give the model choices, few enough to stay cheap
 TIMEOUT_S = 10.0
-USER_AGENT = "WatchParty/0.1 (+https://github.com/<you>/watch-party)"
+USER_AGENT = "WatchParty/0.1 (+https://github.com/joshhannon22/entertainment_agent)"
 HEADERS = {"User-Agent": USER_AGENT}   # CheapShark rejects generic UAs (curl/, python-httpx/) with a 400
 
 # ── TVMaze ───────────────────────────────────────────────

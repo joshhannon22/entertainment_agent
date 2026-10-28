@@ -155,3 +155,17 @@ Same prompt, same settings. One run thought for ~357 tokens, the other didn't th
 **Key lesson:** an API without the data the user's question needs (CheapShark has no genre or co-op info) can be worked around in the schema description, by telling the model *how* to use the tool, not just what it is. The trade-off is that the "fits the request" part of the answer is now the model's own knowledge and isn't grounded, so evals have to treat it separately.
 
 **Feature request (CheapShark):** document the User-Agent requirement on the API docs page and return it with a `403`/`400` plus a docs link, not only in the body. Return numbers as JSON numbers. **(Gemini compat):** nothing new this step.
+
+---
+
+## 2026-10-27: Steps 6–7, metrics and CLI
+
+**Phase:** 1, Steps 6–7 (`agent/metrics.py`, `agent/__main__.py`)
+
+**What happened:**
+- **Pricing has an expiry date.** Google's pricing page lists 3.8 Flash and 3.6 Flash at $0.75/$3.75 per 1M "through Dec 31, 2026", then $1.50/$7.50. A cost dashboard built on a hard-coded price silently halves the real cost on Jan 1. The `PRICING` dict carries the check date and a comment.
+- **"Tokens/sec" from a non-streaming call isn't decode speed.** It mixes prefill, network and decode. A 19-token tool-call turn measured 26 tok/s and a 209-token answer 155 tok/s on the same model. Report it per step and as a run total, and don't compare it with vendor decode benchmarks.
+- **Thinking was 0 on every call this session** (3.5 Flash-Lite, `reasoning_effort=low`). Still non-deterministic across sessions (see 10-18).
+- **Root-logger trap:** `logging.basicConfig(level=INFO)` turned on httpx's request logging too.
+
+**Feature request (Gemini compat):** return a cost or billable-token breakdown in `usage` (`completion_tokens_details.reasoning_tokens`, as the OpenAI spec allows) instead of leaving thinking tokens implicit in `total_tokens`. Every customer who builds a cost dashboard has to rediscover the subtraction.
