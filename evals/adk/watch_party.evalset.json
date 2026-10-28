@@ -1,0 +1,39 @@
+{
+  "eval_set_id": "watch_party_phase1",
+  "name": "Watch Party Phase 1 eval set",
+  "description": "Same 10 questions as evals/questions.yaml. Expected tools are names only (ANY_ORDER, args ignored).",
+  "eval_cases": [
+    {"eval_id": "tv_single", "conversation": [{
+      "user_content": {"role": "user", "parts": [{"text": "Is Arcane finished, and where can I watch it?"}]},
+      "intermediate_data": {"tool_uses": [{"name": "search_tv_shows", "args": {}}]}}]},
+    {"eval_id": "tv_parallel", "conversation": [{
+      "user_content": {"role": "user", "parts": [{"text": "Are Severance and The Bear still running?"}]},
+      "intermediate_data": {"tool_uses": [{"name": "search_tv_shows", "args": {}}]}}]},
+    {"eval_id": "tv_not_found", "conversation": [{
+      "user_content": {"role": "user", "parts": [{"text": "Where can I watch The Zorblax Saga?"}]},
+      "intermediate_data": {"tool_uses": [{"name": "search_tv_shows", "args": {}}]}}]},
+    {"eval_id": "game_price", "conversation": [{
+      "user_content": {"role": "user", "parts": [{"text": "How much is Hades on PC right now?"}]},
+      "intermediate_data": {"tool_uses": [{"name": "find_game_deals", "args": {}}]}}]},
+    {"eval_id": "game_coop_strategy", "conversation": [{
+      "user_content": {"role": "user", "parts": [{"text": "Find me a cheap co-op game to play tonight."}]},
+      "intermediate_data": {"tool_uses": [{"name": "find_game_deals", "args": {}}]}}]},
+    {"eval_id": "book_lookup", "conversation": [{
+      "user_content": {"role": "user", "parts": [{"text": "Who wrote Project Hail Mary, and roughly how many pages is it?"}]},
+      "intermediate_data": {"tool_uses": [{"name": "search_books", "args": {}}]}}]},
+    {"eval_id": "book_recommend", "conversation": [{
+      "user_content": {"role": "user", "parts": [{"text": "Recommend a short sci-fi book I could finish this weekend."}]},
+      "intermediate_data": {"tool_uses": [{"name": "search_books", "args": {}}]}}]},
+    {"eval_id": "game_and_show", "conversation": [{
+      "user_content": {"role": "user", "parts": [{"text": "find me a cheap co-op game and a show to watch after"}]},
+      "intermediate_data": {"tool_uses": [
+        {"name": "find_game_deals", "args": {}}, {"name": "search_tv_shows", "args": {}}]}}]},
+    {"eval_id": "three_tools", "conversation": [{
+      "user_content": {"role": "user", "parts": [{"text": "I've got a free evening: find me a cheap co-op game, a show to watch after, and a short sci-fi book for the weekend."}]},
+      "intermediate_data": {"tool_uses": [
+        {"name": "find_game_deals", "args": {}}, {"name": "search_tv_shows", "args": {}}, {"name": "search_books", "args": {}}]}}]},
+    {"eval_id": "no_tools_needed", "conversation": [{
+      "user_content": {"role": "user", "parts": [{"text": "Hi! What kinds of things can you help me with?"}]},
+      "intermediate_data": {"tool_uses": []}}]}
+  ]
+}

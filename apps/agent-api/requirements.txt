@@ -1,2 +1,2 @@
-google-adk==2.13.0
+google-adk[eval]==2.13.0
 httpx

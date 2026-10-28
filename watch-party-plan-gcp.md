@@ -48,8 +48,8 @@ The core path below is what grows the skill set. Everything else lives in **"Onl
 
 - **Phase 0** — ✅ done
 - **Phase 1** — ✅ done (hand-written agent loop on Gemini). Keep it; it's how you learn what ADK hides.
-- **Phase 1b** — rebuild the same agent in ADK. Short, and it's the single biggest alignment fix for the Google roles. **📍 You're here. See the "Where we left off" note in the Phase 1b section.**
-- **Phases 2–4** — containerize, MCP + multi-agent, RAG + structured data. The real new material.
+- **Phase 1b** — rebuild the same agent in ADK. Short, and it's the single biggest alignment fix for the Google roles. ✅ done.
+- **Phases 2–4** — containerize, MCP + multi-agent, RAG + structured data. The real new material. **📍 Next: Phase 2. See the "Where we left off" note in the Phase 2 section.**
 - **Phase 5 (trimmed)** — Argo CD and pull-based GitOps.
 - **Phase 6 (trimmed)** — NetworkPolicies, sessions/state, LLM metrics and traces, guardrails, RBAC + quotas.
 - **Phase 7** — the capstone on GCP. Private GKE, private access to Vertex AI, VPC Service Controls, Workload Identity, Secret Manager, controlled egress, all through Terraform — plus one comparison deploy to Google's managed agent runtime.
@@ -329,12 +329,10 @@ Each numbered step is sized for one work session. Check it off when you can show
 **Concepts:** tool schemas, the ReAct loop, context management, failure handling, token/cost accounting, trajectory evals.
 **Done when:** `python -m agent "find me a cheap co-op game and a show to watch after"` uses 2 tools correctly on Gemini, the log shows tokens and cost per request, and the eval script runs. ✅ Verified 2026-10-27 — 2 tools + cost on stderr; evals 95% on 3.8 Flash.
 
-### Phase 1b — Rebuild the same agent on Google ADK
+### Phase 1b — Rebuild the same agent on Google ADK ✅ COMPLETE
 
 **Goal:** move onto the agent SDK the Google roles name, and see exactly what it does for you compared to your own loop.
 
-> **📍 WHERE WE LEFT OFF (2026-10-27): Phase 1b steps 1–3 done (ADK agent runs in `adk run`/`adk web`; events and state mapped; state paragraph written). Next: convert `evals/questions.yaml` to an ADK evalset and run `adk eval`.**
-> The user types all code from Phase 1b on (Claude shows the blocks). Run from `apps/agent-api`: `adk run watch_party` / `adk web --port 8000`.
 
 - [x] Port the three tools into an ADK `Agent` (ADK builds the tool schema from type hints and docstrings — compare that to your hand-written JSON schemas)
   - `apps/agent-api/watch_party/{__init__.py, agent.py, tools.py, .env}`, `google-adk==2.13.0`. `tools.py` is a copy of the Phase 1 file with each `*_SCHEMA` description moved into the function's docstring (`Args:` section → parameter descriptions) and the registry deleted. `Agent(tools=[...])` *is* the registry. The duplication is temporary, because both copies go away when the tools move to MCP in Phase 3.
@@ -344,16 +342,26 @@ Each numbered step is sized for one work session. Check it off when you can show
   - The native API exposes `usage_metadata.thoughts_token_count`, which the OpenAI-compatible endpoint hid. Cost per request in ADK comes from the events' `usage_metadata`.
 - [x] Look at how ADK represents **sessions, state and events**. Write one paragraph on where your hand-written loop kept state vs where ADK keeps it — this is the "state management" the posting keeps mentioning
   - Written as `docs/decisions.md` → "Where state lives: hand-written loop vs ADK sessions". Short version: events = the stored `messages` list (this is what memory comes from); state = a deliberate key-value scratchpad scoped by `user:`/`app:`/`temp:` prefixes (empty for us, so the State tab was blank); SessionService = where it's stored (in memory / SQLite / DB / Vertex AI).
-- [ ] Convert `evals/questions.yaml` into an ADK evalset and run `adk eval`. Keep your own script too, and note what each catches that the other doesn't
-- [ ] Keep `apps/agent-loop/` as a reference. From here on, `agent-api` is the ADK version
-- [ ] *FDE habit:* 5-minute recorded demo of both versions side by side, and the first entries in `docs/field-notes.md`
+- [x] Convert `evals/questions.yaml` into an ADK evalset and run `adk eval`. Keep your own script too, and note what each catches that the other doesn't
+  - `evals/adk/watch_party.evalset.json` (same 10 questions, expected tool names only) + `evals/adk/test_config.json`: `tool_trajectory_avg_score` (`ANY_ORDER`, `ignore_args: true`, threshold 1.0) and `hallucinations_v1` (LLM judge, `gemini-3.8-flash`, threshold 0.8). Needs `google-adk[eval]` (pandas etc.). Run from `apps/agent-api`: `adk eval watch_party ../../evals/adk/watch_party.evalset.json --print_detailed_results` (append `:case_id` for one case).
+  - Gotchas: the default trajectory match is `EXACT` *including args*, which would fail every question where the agent chooses its own titles. `response_match_score` (word overlap with a reference answer) was left out because prices change daily. The CLI runs each case once (`AgentEvaluator` in pytest defaults to 2).
+  - **Result: 8/10.** Both failures were `hallucinations_v1` = 0.64 on `book_recommend` and `game_coop_strategy`: the "vibe"/premise sentences are model knowledge, not tool output (Open Library has no synopsis, CheapShark no genre). It's a real finding the regex price check couldn't make. `tv_not_found` passed while making 4 calls (searched books and games for "Zorblax"), which shows that `ANY_ORDER` allows extra calls.
+  - Built-in metrics: tokens incl. **reasoning** (93–840 per question), model/tool/framework time. `three_tools` = 9.6k tokens vs 6.5k in Phase 1, likely because ADK runs default thinking while Phase 1 used `reasoning_effort=low`. Not yet apples to apples.
+  - Comparison written in `docs/decisions.md` → "Two eval harnesses" and "Hand-written loop vs ADK".
+  - **Option A (prompt fix), before → after:** the instruction now says to describe items only with tool data, except for one short "why I picked it" phrase. `book_recommend` 0.64 → **1.0**, `three_tools` 0.86 → **1.0** (and 9.6k → 5.6k tokens, since there's less prose), `game_coop_strategy` 0.64 → **0.77** (still below 0.8). The remaining unsupported sentences are exactly the allowed exception ("a chaotic cooperative cooking game"): the tool can't confirm co-op, so the judge is right. That's as far as prompting goes. The real fix is data with genres (Phase 4 catalog), not lowering the threshold.
+  - Reading results: without `--print_detailed_results` the CLI only prints pass/fail counts. The full per-case results are in `watch_party/.adk/eval_history/*.evalset_result.json` (covered by `.adk/` in `.gitignore`). Cases run in parallel (3 requests went out in the same millisecond).
+- [x] Keep `apps/agent-loop/` as a reference. From here on, `agent-api` is the ADK version
+- [x] ~~*FDE habit:* 5-minute recorded demo of both versions side by side~~ **Skipped by choice (2026-10-27)**: the differences are written up in `docs/decisions.md` instead ("Hand-written loop vs ADK", "Two eval harnesses", "Where state lives"). Field-notes entries done.
 
 **Concepts:** agent frameworks, tool declaration, runners, sessions/state/events, built-in evaluation.
-**Done when:** the ADK agent passes the same eval set as the Phase 1 loop, and `docs/decisions.md` has a "hand-written loop vs ADK" entry you could talk through in an interview.
+**Done when:** the ADK agent passes the same eval set as the Phase 1 loop, and `docs/decisions.md` has a "hand-written loop vs ADK" entry you could talk through in an interview. ✅ Verified 2026-10-28: `adk eval` 10/10 on the full set after the prompt fix (8/10 before). One run only, and `game_coop_strategy` sits near the 0.8 judge threshold (0.77 on the previous run), so expect it to flip. `docs/decisions.md` has "Hand-written loop vs ADK", "Two eval harnesses" and "Where state lives".
 
 ### Phase 2 — Containerize the agent and run it in the cluster
 
 **Goal:** your ADK agent is a real Kubernetes workload.
+
+> **📍 WHERE WE LEFT OFF (2026-10-28): Phase 1b complete. Start Phase 2.**
+> Working style: the user types all code (Claude shows the blocks in pieces) and Claude maintains the docs. Next session: write `docs/discovery/phase-2.md`, recreate the kind cluster if it's gone (`kind create cluster --config kind-config.yaml`), and check the current ADK docs for serving over HTTP (`adk api_server` / `get_fast_api_app`) vs a small FastAPI wrapper with `POST /chat` + `GET /healthz`. Carry-overs: ADK's thinking level isn't set to match Phase 1's `reasoning_effort=low`, so compare cost before Phase 3b; the API key moves from `watch_party/.env` into a Kubernetes Secret (`GOOGLE_API_KEY`), never baked into the image.
 
 - [ ] Serve the ADK agent over HTTP (ADK's FastAPI app, or your own FastAPI wrapper with `POST /chat` and `GET /healthz`)
 - [ ] Use a multi-stage Dockerfile with a slim base image, running as non-root
