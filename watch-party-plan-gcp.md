@@ -47,8 +47,8 @@ The core path below is what grows the skill set. Everything else lives in **"Onl
 **Core path:**
 
 - **Phase 0** — ✅ done
-- **Phase 1** — hand-written agent loop on Gemini. You're here. Keep it; it's how you learn what ADK hides. **📍 Steps 0–8 done (loop, tools, metrics, CLI, evals). Next: Step 9, decisions write-up, then Phase 1b. See the "Where we left off" note in the Phase 1 section.**
-- **Phase 1b** — rebuild the same agent in ADK. Short, and it's the single biggest alignment fix for the Google roles.
+- **Phase 1** — ✅ done (hand-written agent loop on Gemini). Keep it; it's how you learn what ADK hides.
+- **Phase 1b** — rebuild the same agent in ADK. Short, and it's the single biggest alignment fix for the Google roles. **📍 You're here. See the "Where we left off" note in the Phase 1b section.**
 - **Phases 2–4** — containerize, MCP + multi-agent, RAG + structured data. The real new material.
 - **Phase 5 (trimmed)** — Argo CD and pull-based GitOps.
 - **Phase 6 (trimmed)** — NetworkPolicies, sessions/state, LLM metrics and traces, guardrails, RBAC + quotas.
@@ -237,16 +237,11 @@ Each numbered step is sized for one work session. Check it off when you can show
 
 ---
 
-### Phase 1 — Agent v1, hand-written loop in plain Python *(you are here)*
+### Phase 1 — Agent v1, hand-written loop in plain Python ✅ COMPLETE
 
 **Goal:** understand tool calling from first principles. No Kubernetes and no framework in this phase.
 
 > **Why not jump straight to ADK?** The Google postings ask for experience with frameworks *and* for debugging state-management and integration problems inside them. You can only debug what a framework hides if you've written the loop once yourself. This phase is a few sessions, not weeks — then Phase 1b moves you onto ADK.
-
-> **📍 WHERE WE LEFT OFF (2026-10-27): Steps 0–8 done. Evals run at 95% on 3.8 Flash. Next is Step 9, which closes Phase 1.**
-> Next session:
-> 1. Optional: run `python evals/run_evals.py --model gemini-3.5-flash-lite` and compare pass rate and cost with 3.8 Flash. Pick the default model on the numbers.
-> 2. **Step 9:** `docs/decisions.md` → "why hand-write the loop first". Then Phase 1b (ADK).
 
 - [x] Build an LLM client wrapper. One class with `chat(messages, tools)`. **Speak the OpenAI-compatible chat-completions API** and point it at **Gemini** by default (the Gemini API offers an OpenAI-compatible endpoint, so it's a base URL and a key). Azure OpenAI, Anthropic (via a thin adapter) and self-hosted vLLM sit behind the same interface. Verify the current endpoint and model names in Google's docs when you start
   - `apps/agent-loop/agent/llm.py`: `LLMClient(model, base_url, api_key, reasoning_effort)` where each argument falls back to an env var (`MODEL`, `BASE_URL`, `GEMINI_API_KEY`, `REASONING_EFFORT`). `chat(messages, tools=None)` returns a `ChatResult(response, latency_s)` dataclass holding the **full** `ChatCompletion` (the loop needs `.choices`, metrics needs `.usage`), not just the text.
@@ -326,17 +321,20 @@ Each numbered step is sized for one work session. Check it off when you can show
   - **Checks:** expected tools all called (**order not checked**, because parallel calls make it noise), min/max tool calls, `args_must_not_contain` (catches searching for the literal "co-op"), answer contains all/any, and always: has an answer + **every $price in the answer appears in a tool result**.
   - First run (3.8 Flash, 2 runs each): **95%** pass, cost p50 $0.0026 / p95 $0.0050, latency p50 7.1 s / p95 10.4 s. The single failure was **a bug in the eval, not the agent**: "under $10" (a budget) was flagged as an ungrounded price. Fixed by skipping budget phrases. Lesson: read a failure before trusting it; evals need their own tests.
   - Known limit: the price check is number-matching, so a made-up price that happens to equal some other number in the tool output passes. An LLM judge (ADK, Phase 1b) is the next level.
-- [ ] *FDE habit:* write `docs/discovery/phase-1.md` before you start, and `docs/decisions.md` → "why hand-write the loop first"
-  - `docs/discovery/phase-1.md` ✅ written. Targets: ≥ 80% eval pass rate and ≤ $0.10 per request (likely far too generous, so check it against real Step 6 costs). Semantic "find something similar" search is explicitly out of scope until Phase 4. `docs/decisions.md` is still empty (Step 9).
+- [x] *FDE habit:* write `docs/discovery/phase-1.md` before you start, and `docs/decisions.md` → "why hand-write the loop first"
+  - `docs/discovery/phase-1.md` ✅ written. Targets: ≥ 80% eval pass rate and ≤ $0.10 per request (likely far too generous, so check it against real Step 6 costs). Semantic "find something similar" search is explicitly out of scope until Phase 4. `docs/decisions.md` → "why hand-write the loop first" written 2026-10-27 (Step 9), alongside five other Phase 1 decision entries.
   - `docs/field-notes.md` started (three entries): the `thought_signature` coming through the OpenAI-compatible API, hidden thinking tokens in `usage`, and non-deterministic thinking even at `reasoning_effort=low`.
   - Repo hygiene: `.gitignore` covers `.env`, `*secret*.yaml`, `__pycache__/`. The real key is in `apps/agent-loop/.env` (ignored). `apps/agent-loop/.env.example` lists the variable names only and *is* committed.
 
 **Concepts:** tool schemas, the ReAct loop, context management, failure handling, token/cost accounting, trajectory evals.
-**Done when:** `python -m agent "find me a cheap co-op game and a show to watch after"` uses 2 tools correctly on Gemini, the log shows tokens and cost per request, and the eval script runs.
+**Done when:** `python -m agent "find me a cheap co-op game and a show to watch after"` uses 2 tools correctly on Gemini, the log shows tokens and cost per request, and the eval script runs. ✅ Verified 2026-10-27 — 2 tools + cost on stderr; evals 95% on 3.8 Flash.
 
 ### Phase 1b — Rebuild the same agent on Google ADK
 
 **Goal:** move onto the agent SDK the Google roles name, and see exactly what it does for you compared to your own loop.
+
+> **📍 WHERE WE LEFT OFF (2026-10-27): Phase 1 complete. Start Phase 1b.**
+> Next session: write `docs/discovery/phase-1b.md` (half a page), check the current ADK docs (package name, `adk web`/`adk run`/`adk eval` CLI), then port the three tools into an ADK `Agent` in `apps/agent-api/`. Optional first: run the evals on `gemini-3.5-flash-lite` and pick the default model on the numbers.
 
 - [ ] Port the three tools into an ADK `Agent` (ADK builds the tool schema from type hints and docstrings — compare that to your hand-written JSON schemas)
 - [ ] Run it with `adk web` and `adk run`. Step through the dev UI's event/trace view and map each event to a step in your Phase 1 loop
