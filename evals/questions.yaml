@@ -1,0 +1,64 @@
+# Phase 1 eval set. Run: python evals/run_evals.py   (from the repo root)
+#
+# Checks per case (all optional except id/question):
+#   expected_tools        every tool listed must be called at least once (order is NOT checked:
+#                         the model calls tools in parallel, so order within a turn is noise)
+#   min_tool_calls        at least this many tool calls in total (e.g. two shows = two lookups)
+#   max_tool_calls        at most this many (0 = the agent should answer without tools)
+#   args_must_not_contain substrings that must not appear in any tool argument (catches bad strategy)
+#   answer_contains_all   every string must appear in the answer (case-insensitive)
+#   answer_contains_any   at least one must appear (for phrasings that vary run to run)
+#
+# Always checked: the run ended with an answer, and every $price in it appears in a tool result.
+
+- id: tv_single
+  question: "Is Arcane finished, and where can I watch it?"
+  expected_tools: [search_tv_shows]
+  answer_contains_all: ["Netflix"]
+  answer_contains_any: ["ended", "finished", "concluded", "complete"]
+
+- id: tv_parallel
+  question: "Are Severance and The Bear still running?"
+  expected_tools: [search_tv_shows]
+  min_tool_calls: 2
+  answer_contains_all: ["Severance", "The Bear"]
+
+- id: tv_not_found
+  question: "Where can I watch The Zorblax Saga?"
+  expected_tools: [search_tv_shows]
+  answer_contains_any: ["couldn't find", "could not find", "not find", "no results", "unable to find", "don't have", "no information"]
+
+- id: game_price
+  question: "How much is Hades on PC right now?"
+  expected_tools: [find_game_deals]
+  answer_contains_all: ["$"]
+
+- id: game_coop_strategy
+  question: "Find me a cheap co-op game to play tonight."
+  expected_tools: [find_game_deals]
+  # The CheapShark title search has no genre data. Searching for "co-op" is the vague-schema failure mode.
+  args_must_not_contain: ["co-op", "coop", "cooperative"]
+
+- id: book_lookup
+  question: "Who wrote Project Hail Mary, and roughly how many pages is it?"
+  expected_tools: [search_books]
+  answer_contains_all: ["Weir"]
+
+- id: book_recommend
+  question: "Recommend a short sci-fi book I could finish this weekend."
+  expected_tools: [search_books]
+
+- id: game_and_show
+  # The Phase 1 "done when" question
+  question: "find me a cheap co-op game and a show to watch after"
+  expected_tools: [find_game_deals, search_tv_shows]
+  args_must_not_contain: ["co-op", "coop"]
+
+- id: three_tools
+  question: "I've got a free evening: find me a cheap co-op game, a show to watch after, and a short sci-fi book for the weekend."
+  expected_tools: [find_game_deals, search_tv_shows, search_books]
+
+- id: no_tools_needed
+  # Small talk shouldn't cost tool calls
+  question: "Hi! What kinds of things can you help me with?"
+  max_tool_calls: 0

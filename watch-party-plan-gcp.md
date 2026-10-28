@@ -47,7 +47,7 @@ The core path below is what grows the skill set. Everything else lives in **"Onl
 **Core path:**
 
 - **Phase 0** — ✅ done
-- **Phase 1** — hand-written agent loop on Gemini. You're here. Keep it; it's how you learn what ADK hides. **📍 Steps 0–7 done (loop, three tools, metrics, CLI). Next: Step 8, evals. See the "Where we left off" note in the Phase 1 section.**
+- **Phase 1** — hand-written agent loop on Gemini. You're here. Keep it; it's how you learn what ADK hides. **📍 Steps 0–8 done (loop, tools, metrics, CLI, evals). Next: Step 9, decisions write-up, then Phase 1b. See the "Where we left off" note in the Phase 1 section.**
 - **Phase 1b** — rebuild the same agent in ADK. Short, and it's the single biggest alignment fix for the Google roles.
 - **Phases 2–4** — containerize, MCP + multi-agent, RAG + structured data. The real new material.
 - **Phase 5 (trimmed)** — Argo CD and pull-based GitOps.
@@ -243,11 +243,10 @@ Each numbered step is sized for one work session. Check it off when you can show
 
 > **Why not jump straight to ADK?** The Google postings ask for experience with frameworks *and* for debugging state-management and integration problems inside them. You can only debug what a framework hides if you've written the loop once yourself. This phase is a few sessions, not weeks — then Phase 1b moves you onto ADK.
 
-> **📍 WHERE WE LEFT OFF (2026-10-27): Steps 6 + 7 done (metrics + CLI). `python -m agent "..."` works end to end with tokens and cost on stderr. Next is Step 8 (evals).**
-> Working from the coaching plan's steps 0–9 (0 = discovery + hygiene, 1 = LLM client, 2 = first tool, 3 = manual round-trip, 4 = loop, 5 = remaining tools, 6 = metrics, 7 = CLI, 8 = evals, 9 = decisions). **Steps 0–7 are done** (uncommitted at session end unless noted otherwise). Next session:
-> 1. **Step 8, evals:** `evals/questions.yaml` (10 questions + expected tools) and a runner that calls `run_agent` N times per question and reports trajectory pass rate, answer checks, and p50/p95 cost/latency via `metrics.summarize`. Include a grounding case: every price in the answer must appear in a tool result.
-> 2. Use it to settle the model question: `.env` runs `gemini-3.5-flash-lite`, the Step 1 notes say `gemini-3.8-flash`. Compare both (and `reasoning_effort` low vs default) on the eval set.
-> 3. Step 9: `docs/decisions.md` → "why hand-write the loop first". That closes Phase 1.
+> **📍 WHERE WE LEFT OFF (2026-10-27): Steps 0–8 done. Evals run at 95% on 3.8 Flash. Next is Step 9, which closes Phase 1.**
+> Next session:
+> 1. Optional: run `python evals/run_evals.py --model gemini-3.5-flash-lite` and compare pass rate and cost with 3.8 Flash. Pick the default model on the numbers.
+> 2. **Step 9:** `docs/decisions.md` → "why hand-write the loop first". Then Phase 1b (ADK).
 
 - [x] Build an LLM client wrapper. One class with `chat(messages, tools)`. **Speak the OpenAI-compatible chat-completions API** and point it at **Gemini** by default (the Gemini API offers an OpenAI-compatible endpoint, so it's a base URL and a key). Azure OpenAI, Anthropic (via a thin adapter) and self-hosted vLLM sit behind the same interface. Verify the current endpoint and model names in Google's docs when you start
   - `apps/agent-loop/agent/llm.py`: `LLMClient(model, base_url, api_key, reasoning_effort)` where each argument falls back to an env var (`MODEL`, `BASE_URL`, `GEMINI_API_KEY`, `REASONING_EFFORT`). `chat(messages, tools=None)` returns a `ChatResult(response, latency_s)` dataclass holding the **full** `ChatCompletion` (the loop needs `.choices`, metrics needs `.usage`), not just the text.
@@ -321,8 +320,12 @@ Each numbered step is sized for one work session. Check it off when you can show
 - [x] *(Step 7)* CLI: `python -m agent [-v] [--max-steps N] "question"` in `agent/__main__.py`
   - Needed `agent/__init__.py` and package-relative imports (`from .tools import …`), so the old `python loop.py` became `python -m agent.loop`. stdout is the answer only, stderr carries trace + metrics (pipeable). Exit codes: 0 answered, 1 no answer / LLM error, 2 config error.
   - `explain_stop()` maps `stop_reason` → user text at the edge (the Step 4 decision). It matches the part before `:` because Gemini sends `content_filter: PROHIBITED_CONTENT`. `openai.APIError` is caught only in the CLI: tools never raise, but the LLM call can.
-- [ ] Create `evals/questions.yaml` with 10 questions and the tool(s) you expect each to use. Write a small script that runs them and reports pass/fail on the **trajectory** (right tools, right order) and on the answer
+- [x] Create `evals/questions.yaml` with 10 questions and the tool(s) you expect each to use. Write a small script that runs them and reports pass/fail on the **trajectory** (right tools, right order) and on the answer
   - Pass target from the discovery brief: ≥ 80% (8 of 10). Use it to compare Flash vs Flash-Lite and `reasoning_effort` low vs default. Use several runs per question because results are non-deterministic.
+  - **Step 8 ✅ (2026-10-27).** `evals/questions.yaml` has 10 cases: TV single/parallel/not-found, game price, the co-op strategy case, book lookup/recommend, game+show, three tools, and no-tools small talk. `evals/run_evals.py` runs each N times (default 3) and reports per-case k/N, overall pass rate, and p50/p95 cost and latency. It exits 1 below `--target` (the Phase 5 CI gate). Run: `python evals/run_evals.py [--runs N] [--only id] [--model X] [--out file.json]`.
+  - **Checks:** expected tools all called (**order not checked**, because parallel calls make it noise), min/max tool calls, `args_must_not_contain` (catches searching for the literal "co-op"), answer contains all/any, and always: has an answer + **every $price in the answer appears in a tool result**.
+  - First run (3.8 Flash, 2 runs each): **95%** pass, cost p50 $0.0026 / p95 $0.0050, latency p50 7.1 s / p95 10.4 s. The single failure was **a bug in the eval, not the agent**: "under $10" (a budget) was flagged as an ungrounded price. Fixed by skipping budget phrases. Lesson: read a failure before trusting it; evals need their own tests.
+  - Known limit: the price check is number-matching, so a made-up price that happens to equal some other number in the tool output passes. An LLM judge (ADK, Phase 1b) is the next level.
 - [ ] *FDE habit:* write `docs/discovery/phase-1.md` before you start, and `docs/decisions.md` → "why hand-write the loop first"
   - `docs/discovery/phase-1.md` ✅ written. Targets: ≥ 80% eval pass rate and ≤ $0.10 per request (likely far too generous, so check it against real Step 6 costs). Semantic "find something similar" search is explicitly out of scope until Phase 4. `docs/decisions.md` is still empty (Step 9).
   - `docs/field-notes.md` started (three entries): the `thought_signature` coming through the OpenAI-compatible API, hidden thinking tokens in `usage`, and non-deterministic thinking even at `reasoning_effort=low`.
