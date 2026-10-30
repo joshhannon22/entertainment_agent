@@ -184,3 +184,17 @@ Same prompt, same settings. One run thought for ~357 tokens, the other didn't th
 - The first `adk run` prompts to opt in to telemetry (default shown as `[Y/n]`, while the text says "OFF by default").
 
 **Feature request (ADK):** show `max_llm_calls` and the session backend in the `adk run`/`adk web` startup banner, and warn when a string instruction contains `{...}` placeholders that aren't in state at agent load time, instead of at request time.
+
+---
+
+## 2026-10-29: Phase 2, serving ADK over HTTP
+
+**Phase:** 2, Step 1 (`apps/agent-api/main.py`)
+
+**What happened:**
+- **ADK runs sync tools on the event loop by default.** `RunConfig.tool_thread_pool_config` defaults to `None`, so our blocking `httpx` tools (up to a 10 s timeout) would freeze every concurrent request on the process, `/healthz` included. Under load that's failed probes and restarts. Fix: `RunConfig(tool_thread_pool_config=ToolThreadPoolConfig())` (4 workers). Found by reading `google/adk/agents/run_config.py`, not the docs.
+- **`get_fast_api_app()` is a dev server, not a product API.** It mounts eval, debug-trace and builder routes alongside `/run`. We wrapped `Runner` in our own 2-route FastAPI app instead.
+- **Session loss is silent unless you make it loud.** A restarted process (or another replica) has an empty `InMemorySessionService`. We return 404 naming the host; auto-creating a session would have made the agent quietly forget the conversation. After `/new`, "where can I watch it?" made the agent search for the title *It* (4 LLM calls, 15 s, 8k tokens).
+- Agent turns take 2–13 s, so httpx's 5 s default client timeout is wrong for any caller.
+
+**Feature request (ADK):** make running sync `FunctionTool`s in a thread pool the default outside live mode (or at least warn at startup when a sync tool is registered and the pool is off), and offer a `production=True` flag on `get_fast_api_app()` that drops the dev-only routes.

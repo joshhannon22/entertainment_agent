@@ -360,11 +360,21 @@ Each numbered step is sized for one work session. Check it off when you can show
 
 **Goal:** your ADK agent is a real Kubernetes workload.
 
-> **📍 WHERE WE LEFT OFF (2026-10-28): Phase 1b complete. Start Phase 2.**
-> Working style: the user types all code (Claude shows the blocks in pieces) and Claude maintains the docs. Next session: write `docs/discovery/phase-2.md`, recreate the kind cluster if it's gone (`kind create cluster --config kind-config.yaml`), and check the current ADK docs for serving over HTTP (`adk api_server` / `get_fast_api_app`) vs a small FastAPI wrapper with `POST /chat` + `GET /healthz`. Carry-overs: ADK's thinking level isn't set to match Phase 1's `reasoning_effort=low`, so compare cost before Phase 3b; the API key moves from `watch_party/.env` into a Kubernetes Secret (`GOOGLE_API_KEY`), never baked into the image.
+> **📍 WHERE WE LEFT OFF (2026-10-29): Phase 2 steps 1–2 done (HTTP wrapper, chat client, non-root image `agent-api:v1`). Next: step 3, Helm chart.**
+> Working style: the user types all code (Claude shows the blocks in pieces) and Claude maintains the docs. `docs/discovery/phase-2.md` written. Next: recreate the kind cluster (`kind create cluster --config kind-config.yaml`) for the Helm step. Carry-overs: ADK's thinking level isn't set to match Phase 1's `reasoning_effort=low`, so compare cost before Phase 3b; the API key moves from `watch_party/.env` into a Kubernetes Secret (`GOOGLE_API_KEY`), never baked into the image.
 
-- [ ] Serve the ADK agent over HTTP (ADK's FastAPI app, or your own FastAPI wrapper with `POST /chat` and `GET /healthz`)
-- [ ] Use a multi-stage Dockerfile with a slim base image, running as non-root
+- [x] Serve the ADK agent over HTTP (ADK's FastAPI app, or your own FastAPI wrapper with `POST /chat` and `GET /healthz`)
+  - **Step 1 ✅ (2026-10-29).** `apps/agent-api/main.py`: our own FastAPI wrapper around ADK's `Runner` + `InMemorySessionService` (not `get_fast_api_app`, which mounts dev-only eval/trace/builder routes; see `docs/decisions.md`). `watch_party/` is unchanged, so `adk web`/`adk eval` still work. Run: `uvicorn main:app --port 8000 --env-file watch_party/.env` (env injected at launch, same as a ConfigMap/Secret later).
+  - `POST /chat {message, session_id?, user_id?}` → `answer`, `session_id`, `served_by` (hostname = pod name in k8s), `tool_calls`, `llm_calls`, prompt/output/**thinking** tokens, `latency_s`. Unknown `session_id` → **404 naming the host**, deliberately not auto-create, so lost state is loud. `LLM APIError` → 502. `/healthz` never calls Gemini.
+  - **Gotcha:** ADK runs sync tools *on the event loop* by default (`RunConfig.tool_thread_pool_config=None`), so one slow CheapShark call would block every request on the pod, probes included. Fixed with `ToolThreadPoolConfig()`.
+  - Dev client `scripts/chat.py` (rich; `requirements-dev.txt`, kept out of the image): renders Markdown, carries `session_id`, prints `pod=… tools=… tokens … latency`. Rich gotcha: `[name]` in a string is parsed as markup and disappears.
+  - Verified: follow-up "where can I watch it?" → 0 tools, 1 LLM call (session memory). After a server restart the same session → `404 session … not found on Mac.lan`, the Phase 2 multi-replica problem in miniature.
+- [x] Use a multi-stage Dockerfile with a slim base image, running as non-root
+  - **Step 2 ✅ (2026-10-29).** `apps/agent-api/Dockerfile`: build stage `pip install`s into `/opt/venv`; runtime stage (`python:3.14-slim`, matching the local venv) copies only the venv + `main.py` + `watch_party/`, runs as **numeric** `USER 10001` (so `runAsNonRoot` can verify it), `PYTHONUNBUFFERED=1` (otherwise logs are buffered and arrive late in `kubectl logs`). Image 394 MB.
+  - `.dockerignore` excludes `**/.env`, `.adk`, `__pycache__`, `scripts/`, dev requirements. That's what keeps the API key out: `COPY watch_party/` would otherwise bake `.env` into a layer, and a later `RUN rm` doesn't remove it from the earlier layer.
+  - Deps split: `requirements.txt` = runtime only, pinned; `requirements-dev.txt` = `-r requirements.txt` + `google-adk[eval]` + `rich`.
+  - Verified: `id` → `uid=10001(app)`; `/app` holds only 4 files; scanning `docker export` and `docker history` for the key finds nothing; `docker run --env-file watch_party/.env -p 8080:8000` → `/chat` answered with 1 tool call, `served_by` = container ID.
+  - Gotcha: the container clock is **UTC**, and `build_instruction` uses `date.today()`, so from 8 pm to midnight ET the agent thinks it's tomorrow. Harmless for now; set `TZ` or pass the user's date when it matters.
 - [ ] Write the Helm chart: Deployment, Service, a ConfigMap for the model name and max steps, and a Secret for the Gemini API key, created with `kubectl create secret` and **never committed**
 - [ ] Deploy to kind and call it via port-forward
 - [ ] Scale to 3 replicas and watch requests spread across them in the logs. Notice what happens to conversation state when two turns hit different replicas — that's the problem Phase 6 solves

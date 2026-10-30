@@ -1,2 +1,4 @@
-google-adk[eval]==2.13.0
-httpx
+google-adk==2.13.0
+httpx==0.28.1
+fastapi==0.142.2
+uvicorn[standard]==0.54.0
