@@ -49,7 +49,7 @@ The core path below is what grows the skill set. Everything else lives in **"Onl
 - **Phase 0** — ✅ done
 - **Phase 1** — ✅ done (hand-written agent loop on Gemini). Keep it; it's how you learn what ADK hides.
 - **Phase 1b** — rebuild the same agent in ADK. Short, and it's the single biggest alignment fix for the Google roles. ✅ done.
-- **Phases 2–4** — containerize, MCP + multi-agent, RAG + structured data. The real new material. **📍 Next: Phase 2. See the "Where we left off" note in the Phase 2 section.**
+- **Phases 2–4** — containerize, MCP + multi-agent, RAG + structured data. The real new material. Phase 2 ✅. **📍 Next: Phase 3. See the "Where we left off" note in the Phase 3 section.**
 - **Phase 5 (trimmed)** — Argo CD and pull-based GitOps.
 - **Phase 6 (trimmed)** — NetworkPolicies, sessions/state, LLM metrics and traces, guardrails, RBAC + quotas.
 - **Phase 7** — the capstone on GCP. Private GKE, private access to Vertex AI, VPC Service Controls, Workload Identity, Secret Manager, controlled egress, all through Terraform — plus one comparison deploy to Google's managed agent runtime.
@@ -356,12 +356,9 @@ Each numbered step is sized for one work session. Check it off when you can show
 **Concepts:** agent frameworks, tool declaration, runners, sessions/state/events, built-in evaluation.
 **Done when:** the ADK agent passes the same eval set as the Phase 1 loop, and `docs/decisions.md` has a "hand-written loop vs ADK" entry you could talk through in an interview. ✅ Verified 2026-10-28: `adk eval` 10/10 on the full set after the prompt fix (8/10 before). One run only, and `game_coop_strategy` sits near the 0.8 judge threshold (0.77 on the previous run), so expect it to flip. `docs/decisions.md` has "Hand-written loop vs ADK", "Two eval harnesses" and "Where state lives".
 
-### Phase 2 — Containerize the agent and run it in the cluster
+### Phase 2 — Containerize the agent and run it in the cluster ✅ COMPLETE
 
 **Goal:** your ADK agent is a real Kubernetes workload.
-
-> **📍 WHERE WE LEFT OFF (2026-10-29): Phase 2 steps 1–2 done (HTTP wrapper, chat client, non-root image `agent-api:v1`). Next: step 3, Helm chart.**
-> Working style: the user types all code (Claude shows the blocks in pieces) and Claude maintains the docs. `docs/discovery/phase-2.md` written. Next: recreate the kind cluster (`kind create cluster --config kind-config.yaml`) for the Helm step. Carry-overs: ADK's thinking level isn't set to match Phase 1's `reasoning_effort=low`, so compare cost before Phase 3b; the API key moves from `watch_party/.env` into a Kubernetes Secret (`GOOGLE_API_KEY`), never baked into the image.
 
 - [x] Serve the ADK agent over HTTP (ADK's FastAPI app, or your own FastAPI wrapper with `POST /chat` and `GET /healthz`)
   - **Step 1 ✅ (2026-10-29).** `apps/agent-api/main.py`: our own FastAPI wrapper around ADK's `Runner` + `InMemorySessionService` (not `get_fast_api_app`, which mounts dev-only eval/trace/builder routes; see `docs/decisions.md`). `watch_party/` is unchanged, so `adk web`/`adk eval` still work. Run: `uvicorn main:app --port 8000 --env-file watch_party/.env` (env injected at launch, same as a ConfigMap/Secret later).
@@ -375,16 +372,31 @@ Each numbered step is sized for one work session. Check it off when you can show
   - Deps split: `requirements.txt` = runtime only, pinned; `requirements-dev.txt` = `-r requirements.txt` + `google-adk[eval]` + `rich`.
   - Verified: `id` → `uid=10001(app)`; `/app` holds only 4 files; scanning `docker export` and `docker history` for the key finds nothing; `docker run --env-file watch_party/.env -p 8080:8000` → `/chat` answered with 1 tool call, `served_by` = container ID.
   - Gotcha: the container clock is **UTC**, and `build_instruction` uses `date.today()`, so from 8 pm to midnight ET the agent thinks it's tomorrow. Harmless for now; set `TZ` or pass the user's date when it matters.
-- [ ] Write the Helm chart: Deployment, Service, a ConfigMap for the model name and max steps, and a Secret for the Gemini API key, created with `kubectl create secret` and **never committed**
-- [ ] Deploy to kind and call it via port-forward
-- [ ] Scale to 3 replicas and watch requests spread across them in the logs. Notice what happens to conversation state when two turns hit different replicas — that's the problem Phase 6 solves
+- [x] Write the Helm chart: Deployment, Service, a ConfigMap for the model name and max steps, and a Secret for the Gemini API key, created with `kubectl create secret` and **never committed**
+  - **Step 3 ✅ (2026-10-29).** `charts/agent-api/`: `configmap.yaml` (`range` over `values.config` → `MODEL`, `ADK_MAX_LLM_CALLS`, `GOOGLE_GENAI_USE_VERTEXAI`; `| quote` required because ConfigMap values must be strings), `service.yaml` (ClusterIP :80 → **named** port `http`, so `containerPort` is now load-bearing, unlike Phase 0), `deployment.yaml` (`envFrom` the ConfigMap + one explicit `secretKeyRef` for `GOOGLE_API_KEY`, checksum annotation, probes on `/healthz`).
+  - **No `secret.yaml` in the chart** (unlike `charts/hello`, whose value sat in committed `values.yaml`). The chart only names `existingSecret: agent-api-secrets`; the Secret is made by hand: `kubectl create secret generic agent-api-secrets --from-literal=GOOGLE_API_KEY="$(grep '^GOOGLE_API_KEY=' apps/agent-api/watch_party/.env | cut -d= -f2-)"` (keeps the key out of shell history). Missing Secret → `CreateContainerConfigError`.
+  - Hardened to Pod Security "restricted": `runAsNonRoot` + `runAsUser: 10001` (needs the numeric `USER`), `seccompProfile: RuntimeDefault`, `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`, `readOnlyRootFilesystem: true` + an `emptyDir` on `/tmp`. Verified `touch /app/x` → `Read-only file system`, and nothing in ADK needed to write.
+  - Resources sized from measurement (cgroup `memory.current` ≈ 100 MiB after one request): requests 100m/256Mi, limits 1 CPU/512Mi. Liveness is slower and more tolerant than readiness, since a restart is the drastic action.
+  - Prototyped first in a throwaway namespace with a fake key: Ready in 2 s, `/chat` → clean `502 LLM provider error (400)`, which also proved the error path.
+- [x] Deploy to kind and call it via port-forward
+  - **Step 4 ✅ (2026-10-29).** `helm install agent-api charts/agent-api` → `kubectl port-forward svc/agent-api 8080:80` → `scripts/chat.py --url http://localhost:8080`: `pod=agent-api-59f875d54f-js75h`, 2 parallel `search_tv_shows` calls, grounded answer, 16.25 s.
+  - The ReplicaSet hash matched the prototype's pod in the other namespace (identical pod template → identical hash).
+  - **Thinking = 1,370 of 1,750 output tokens (78%)** on that turn: ADK uses Gemini's default thinking level. That's the carry-over to fix before Phase 3b cost comparisons.
+- [x] Scale to 3 replicas and watch requests spread across them in the logs. Notice what happens to conversation state when two turns hit different replicas — that's the problem Phase 6 solves
+  - **Step 5 ✅ (2026-10-29).** `helm upgrade agent-api charts/agent-api --set replicaCount=3` (revision 2; `--set` lives only in Helm history, which is drift once Argo CD arrives in Phase 5). Test from **inside** the cluster with a `curlimages/curl` pod hitting `http://agent-api/chat`: turn 1 on `js75h` created the session, **all 5 follow-ups landed on `bb8dd`/`k5d88` → `404 session … not found on <pod>`**.
+  - **`port-forward svc/…` hides the bug:** it pins one pod at startup and bypasses kube-proxy, so `chat.py` from the laptop always looked fine. kube-proxy picks a random ready pod per new TCP connection, so in-cluster traffic spreads.
+  - **Log gotcha:** `kubectl logs -l app=agent-api` defaults to `--tail=10` *per pod*, and all 30 lines were `/healthz` probe hits. Use `--tail=-1 --prefix`. Probe noise in access logs is worth filtering later (Phase 6).
+  - Lesson: in-memory sessions make the pod stateful, so any replica count > 1, restart, or reschedule loses conversations. Fix is a shared session store (Phase 6: ADK `DatabaseSessionService` on Postgres). Sticky sessions only hide it.
 
 **Concepts:** 12-factor config, secret handling, stateless services, scaling, why session state can't live in the pod.
-**Done when:** `curl localhost:8080/chat -d '{"message":"..."}'` returns an answer from inside the cluster.
+**Done when:** `curl localhost:8080/chat -d '{"message":"..."}'` returns an answer from inside the cluster. ✅ Verified 2026-10-29: `chat.py` via port-forward answered from `agent-api-59f875d54f-js75h`; 3-replica test showed the session problem.
 
 ### Phase 3 — Split tools into an MCP server (microservices + cluster DNS)
 
 **Goal:** two services that talk over the cluster network, plus a real agent protocol.
+
+> **📍 WHERE WE LEFT OFF (2026-10-29): Phase 2 complete. Start Phase 3.**
+> Working style: the user types all code (Claude shows the blocks in pieces) and Claude maintains the docs. kind cluster `watch-party` has release `agent-api` (revision 2, **3 replicas via `--set`**) + hand-made Secret `agent-api-secrets`; recreate both if the cluster is gone (commands in Phase 2 step 3 notes; `kind load docker-image agent-api:v1 --name watch-party` first). Open quick-check to answer first: why doesn't `sessionAffinity: ClientIP` fix the session problem in production? Next: `docs/discovery/phase-3.md` + architecture one-pager, check current MCP Python SDK (streamable HTTP) and ADK `McpToolset` docs, then move the 3 tools into `apps/tools-server/`. Carry-over: ADK's thinking level isn't set to match Phase 1's `reasoning_effort=low` (78% of output tokens on a Phase 2 turn were thinking), so fix and compare cost before Phase 3b.
 
 - [ ] Move the tools into `tools-server` as an MCP server using the Python MCP SDK over streamable HTTP
 - [ ] Add more tools: Jikan anime, FreeToGame, Open Trivia, JokeAPI
