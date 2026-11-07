@@ -215,3 +215,15 @@ Same prompt, same settings. One run thought for ~357 tokens, the other didn't th
 - Good default by contrast: MCP v2 runs sync tools in a thread pool (`anyio.to_thread`); ADK's `FunctionTool` needed `ToolThreadPoolConfig` for that.
 
 **Feature request (ADK):** a `required=True` (or `on_load_error="raise"`) option on toolsets so an agent that can't do anything useful without its tools fails the turn instead of running tool-less; and when a toolset failed to load, don't send the model a function-call history for tools it no longer has without a system note saying they're unavailable.
+
+## 2026-11-07: Phase 3, four more public APIs
+
+**Phase:** 3, Step 2 (`search_anime`, `find_free_games`, `get_trivia`, `get_joke`)
+
+**What happened:**
+- **Jikan was unreachable for the whole session:** DNS resolved (`135.181.39.91`), TCP connect never completed, the status page too. The tool returned a clean error dict, but after **20 s rather than `TIMEOUT_S = 10`**: httpx timeouts are per phase / per connect attempt, not a total deadline. With the agent's MCP timeout at 30 s that's one retry away from the agent giving up first. Retries need an overall deadline.
+- **FreeToGame says "no results" as HTTP 201** with `{"status": 0, "status_message": "No results available at the moment, please try again later."}`. It looks like a transient error but is a permanent empty result for that filter combo (e.g. `horror` + `browser`). Mapped to `count: 0`.
+- **Open Trivia DB returns errors in HTTP 200** (`response_code` 1 = not enough questions, 5 = rate limited at 1 request / 5 s / IP). `raise_for_status()` never sees them; every API needs its own "is this actually an error" check.
+- FreeToGame has no co-op tag; `Literal` enums in the function signature become JSON-schema `enum`s through the MCP SDK, which keeps the model from inventing one.
+
+**Feature request (MCP Python SDK):** an optional per-tool `timeout`/deadline in `@mcp.tool()` that cancels a slow sync tool and returns a structured error to the client, so servers don't each reinvent "total deadline" around their HTTP clients.
