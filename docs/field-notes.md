@@ -198,3 +198,20 @@ Same prompt, same settings. One run thought for ~357 tokens, the other didn't th
 - Agent turns take 2–13 s, so httpx's 5 s default client timeout is wrong for any caller.
 
 **Feature request (ADK):** make running sync `FunctionTool`s in a thread pool the default outside live mode (or at least warn at startup when a sync tool is registered and the pool is off), and offer a `production=True` flag on `get_fast_api_app()` that drops the dev-only routes.
+
+---
+
+## 2026-11-06: Phase 3, tools behind MCP
+
+**Phase:** 3, Steps 1 and 4 (`apps/tools-server/server.py`, `McpToolset` in `watch_party/agent.py`)
+
+**What happened:**
+- **ADK silently drops a toolset that fails to load.** With tools-server stopped, `LlmAgent._convert_tool_union_to_tools` catches *every* exception from `McpToolset.get_tools()`, logs `Agent watch_party will run without the tools from toolset McpToolset`, and runs the turn with **zero tools**. Our `except ConnectionError` in `main.py` never fired. The model still emitted `find_game_deals` / `search_tv_shows` calls (copied from earlier turns in the session) → `Tool 'find_game_deals' not found` → it then answered with **invented prices, review counts and air dates** (Left 4 Dead 2 "$9.99, 97% of 234,877 reviews"; División Palermo dates). The client got `200 OK`. Not configurable. Workaround: a `get_tools()` preflight in `/chat` that returns 503 before any LLM call, plus an instruction line forbidding answers from memory when tools fail.
+- **MCP SDK v2 renamed `FastMCP` → `MCPServer`.** Most tutorials and the plan still say FastMCP.
+- **DNS-rebinding protection is on by default for `host="127.0.0.1"`** in `streamable_http_app()`, so in-cluster requests with `Host: tools-server` get `421 Invalid Host header`. Pass `host="0.0.0.0"` (or explicit `TransportSecuritySettings(allowed_hosts=...)`).
+- **MCP SDK puts the whole docstring in the tool description;** it does not parse `Args:` into per-parameter descriptions like ADK's `FunctionTool` does. Same text reaches the model, different place in the schema.
+- **`StreamableHTTPConnectionParams.timeout` defaults to 5 s**, shorter than our tools' own 10 s timeout, so the agent would abandon a slow call before the tool could return its clean error dict. Set to 30 s.
+- ADK's MCP HTTP client logs `Failed to configure mTLS ... default credentials were not found` on every connection when there's no ADC. Harmless (falls back to plain HTTP), noisy.
+- Good default by contrast: MCP v2 runs sync tools in a thread pool (`anyio.to_thread`); ADK's `FunctionTool` needed `ToolThreadPoolConfig` for that.
+
+**Feature request (ADK):** a `required=True` (or `on_load_error="raise"`) option on toolsets so an agent that can't do anything useful without its tools fails the turn instead of running tool-less; and when a toolset failed to load, don't send the model a function-call history for tools it no longer has without a system note saying they're unavailable.

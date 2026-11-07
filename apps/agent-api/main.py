@@ -3,6 +3,7 @@
 POST /chat  -> run one turn through the ADK Runner, return the answer + metrics
 GET  /healthz -> liveness: is this process up? (never calls Gemini)
 """
+from contextlib import asynccontextmanager
 import logging
 import socket
 import time
@@ -29,7 +30,13 @@ log = logging.getLogger("agent_api")
 session_service = InMemorySessionService()
 runner = Runner(app_name=APP_NAME, agent=root_agent, session_service=session_service)
 
-app = FastAPI(title="watch-party agent-api")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    await runner.close()  # closes the MCP toolset's HTTP client cleanly on shutdown
+
+
+app = FastAPI(title="watch-party agent-api", lifespan=lifespan)
 
 
 class ChatRequest(BaseModel):
@@ -96,6 +103,9 @@ async def chat(req: ChatRequest) -> ChatResponse:
     except genai_errors.APIError as e:
         log.error("LLM call failed: %r", e)
         raise HTTPException(status_code=502, detail=f"LLM provider error ({e.code})")
+    except ConnectionError as e:
+        log.error("tools-server unreachable: %r", e)
+        raise HTTPException(status_code=503, detail="tools-server unavailable")
     latency_s = round(time.perf_counter() - start, 2)
 
     log.info(
