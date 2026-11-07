@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   repository: agent-api
-  tag: v1
+  tag: v2
   pullPolicy: IfNotPresent
 
 service:
@@ -13,6 +13,7 @@ config:
   MODEL: gemini-3.8-flash
   ADK_MAX_LLM_CALLS: "6"
   GOOGLE_GENAI_USE_VERTEXAI: "FALSE"
+  TOOLS_SERVER_URL: http://tools-server.watch-party.svc.cluster.local/mcp
 
 # The Secret is created by hand (kubectl create secret), never by this chart.
 existingSecret: agent-api-secrets

@@ -17,7 +17,7 @@ from google.genai import errors as genai_errors
 from google.genai import types
 from pydantic import BaseModel, Field
 
-from watch_party.agent import root_agent
+from watch_party.agent import root_agent, tools_server
 
 APP_NAME = "watch_party"
 HOSTNAME = socket.gethostname()  # in Kubernetes this is the pod name
@@ -64,6 +64,13 @@ def healthz() -> dict:
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest) -> ChatResponse:
+    # ADK swallows toolset load errors and runs the agent with zero tools, so the model
+    # answers from memory. Check tools-server ourselves and fail loudly instead.
+    try:
+        await tools_server.get_tools()
+    except ConnectionError as e:
+        log.error("tools-server unreachable: %r", e)
+        raise HTTPException(status_code=503, detail="tools-server unavailable")
     if req.session_id is None:
         session = await session_service.create_session(
             app_name=APP_NAME, user_id=req.user_id, session_id=str(uuid.uuid4())
@@ -103,9 +110,6 @@ async def chat(req: ChatRequest) -> ChatResponse:
     except genai_errors.APIError as e:
         log.error("LLM call failed: %r", e)
         raise HTTPException(status_code=502, detail=f"LLM provider error ({e.code})")
-    except ConnectionError as e:
-        log.error("tools-server unreachable: %r", e)
-        raise HTTPException(status_code=503, detail="tools-server unavailable")
     latency_s = round(time.perf_counter() - start, 2)
 
     log.info(

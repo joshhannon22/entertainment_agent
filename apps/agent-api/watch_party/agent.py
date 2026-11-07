@@ -29,6 +29,8 @@ def build_instruction(ctx: ReadonlyContext) -> str:
         "Open Library subjects, Steam ratings). Don't add plot summaries, genres or 'vibe' from "
         "your own knowledge. The one exception: one short phrase on why you picked a title "
         "(e.g. 'a well-known two-player co-op game'), since the tools can't search by genre."
+        " If a tool call fails or a tool isn't available, say the data source is unavailable; "
+        "never fill in prices, ratings or dates from memory."
     )
 
 
