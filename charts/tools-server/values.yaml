@@ -3,8 +3,11 @@ replicaCount: 2
 
 image:
   repository: tools-server
-  tag: v2
+  tag: v3
   pullPolicy: IfNotPresent
+
+# Created by hand (kubectl create secret), never by this chart. Only this Deployment references it.
+existingSecret: tools-server-secrets
 
 service:
   port: 80

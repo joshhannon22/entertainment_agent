@@ -1,5 +1,6 @@
 import html
 import json
+import os
 import random
 import re
 import threading
@@ -73,6 +74,19 @@ JOKEAPI_URL = "https://v2.jokeapi.dev/joke/{category}"
 JOKE_BLACKLIST = "nsfw,religious,political,racist,sexist,explicit"
 JokeCategory = Literal["Any", "Programming", "Misc", "Pun", "Spooky", "Christmas"]   # "Dark" left out on purpose
 
+# ── TMDb ─────────────────────────────────────────────────
+TMDB_SEARCH_URL = "https://api.themoviedb.org/3/search/movie"
+# v4 "API Read Access Token". Injected from a k8s Secret (or --env-file locally), never baked
+# into the image. Read once at import: env vars are fixed at container start anyway, so a
+# rotated Secret needs a rollout restart either way.
+TMDB_TOKEN = os.getenv("TMDB_API_TOKEN")
+TMDB_GENRES = {   # /genre/movie/list, stable for years; search results only carry genre_ids
+    28: "Action", 12: "Adventure", 16: "Animation", 35: "Comedy", 80: "Crime",
+    99: "Documentary", 18: "Drama", 10751: "Family", 14: "Fantasy", 36: "History",
+    27: "Horror", 10402: "Music", 9648: "Mystery", 10749: "Romance", 878: "Science Fiction",
+    10770: "TV Movie", 53: "Thriller", 10752: "War", 37: "Western",
+}
+
 # ── Helpers ──────────────────────────────────────────────
 def _strip_html(text: str | None) -> str:
     """TVMaze summaries contain <p>/<b> tags — tokens the model doesn't need."""
@@ -111,7 +125,8 @@ def _num(value, cast=float):
         return None
 
 
-def _get_json(source: str, url: str, params: dict, fallback: str) -> tuple[object, dict | None]:
+def _get_json(source: str, url: str, params: dict, fallback: str,
+              headers: dict | None = None) -> tuple[object, dict | None]:
     """GET url and parse the JSON body. Returns (data, None) or (None, error_dict). Never raises.
 
     The same error contract the first three tools write out by hand. `fallback` is the
@@ -119,7 +134,7 @@ def _get_json(source: str, url: str, params: dict, fallback: str) -> tuple[objec
     The retries step will add retry/backoff here, once, for every tool that uses it.
     """
     try:
-        resp = httpx.get(url, params=params, headers=HEADERS, timeout=TIMEOUT_S)
+        resp = httpx.get(url, params=params, headers={**HEADERS, **(headers or {})}, timeout=TIMEOUT_S)
         resp.raise_for_status()
     except httpx.TimeoutException:
         return None, {"error": f"{source} timed out. {fallback}"}
@@ -375,6 +390,56 @@ def search_anime(query: str) -> dict:
 
     return {"query": query, "count": len(results), "results": results}
 
+# ── Tool: search_movies ──────────────────────────────────
+def search_movies(query: str, year: int | None = None) -> dict:
+    """Look up movies by title on The Movie Database (TMDb).
+
+    Matching is on the title, so results can include remakes, sequels, and unrelated films
+    with similar names; use release_year and vote_count to pick the right one. Returns up to
+    5 movies, each with: title, original_title, release_year, genres, rating (TMDb users,
+    0-10, null if unrated), vote_count (how many ratings; a 9.0 from 3 votes means little),
+    original_language, and a short overview. There is no runtime or streaming availability.
+
+    Use this when the user names a specific movie or wants details about one: when it came
+    out, how well rated it is, what it's about. Use search_tv_shows for series and
+    search_anime for anime. Do NOT use it to find movies by genre, mood, or similarity
+    (e.g. 'movies like Inception'); it only matches titles.
+
+    Args:
+        query: A movie title or part of one, e.g. 'Dune' or 'Spirited Away'. Not a genre,
+            mood, or description.
+        year: Release year. Only set it when the user gave one, or to tell a remake from
+            the original (e.g. 1984 vs 2021 for 'Dune'). Omit it otherwise.
+    """
+    if not TMDB_TOKEN:
+        return {"error": "TMDb isn't configured on this server (no API token). Answer without movie details."}
+
+    params = {"query": query, "include_adult": "false"}
+    if year is not None:
+        params["primary_release_year"] = year
+    data, err = _get_json("TMDb", TMDB_SEARCH_URL, params, "Answer without movie details.",
+                          headers={"Authorization": f"Bearer {TMDB_TOKEN}"})
+    if err:
+        return err
+    if not isinstance(data, dict):
+        print(f"[tmdb] unexpected payload: {str(data)[:200]}")
+        return {"error": "TMDb returned an unexpected response. Answer without movie details."}
+
+    results = []
+    for movie in data.get("results", [])[:MAX_RESULTS]:
+        results.append({
+            "title": movie.get("title"),
+            "original_title": movie.get("original_title"),
+            "release_year": _num((movie.get("release_date") or "")[:4], int),   # "" for unreleased
+            "genres": [TMDB_GENRES.get(g, f"genre {g}") for g in movie.get("genre_ids", [])],
+            "rating": movie.get("vote_average") or None,   # 0.0 means "no votes", not "terrible"
+            "vote_count": movie.get("vote_count"),
+            "original_language": movie.get("original_language"),
+            "overview": (movie.get("overview") or "")[:SUMMARY_CHARS],
+        })
+
+    return {"query": query, "count": len(results), "results": results}
+
 
 # ── Tool: find_free_games ────────────────────────────────
 def find_free_games(
@@ -535,7 +600,10 @@ if __name__ == "__main__":
         ("books: by title",      search_books,     {"query": "Project Hail Mary"}),  # expect knockoffs with editions=1
         ("books: by author",     search_books,     {"query": "Andy Weir"}),
         ("books: not found",     search_books,     {"query": "zzqxblorp"}),
-        ("anime: happy path",    search_anime,     {"query": "Cowboy Bebop"}),     # expect TV + movie entries
+        ("anime: happy path",    search_anime,     {"query": "Cowboy Bebop"}), 
+        ("movies: happy path",   search_movies,    {"query": "Dune"}),             # expect 2021 + 1984 + others
+        ("movies: with year",    search_movies,    {"query": "Dune", "year": 1984}),
+        ("movies: not found",    search_movies,    {"query": "zzqxblorp"}),
         ("free: by category",    find_free_games,  {"category": "card", "platform": "pc"}),
         ("free: no results",     find_free_games,  {"category": "horror", "platform": "browser"}),  # HTTP 201 -> count 0
         ("trivia: tv easy",      get_trivia,       {"category": "tv", "difficulty": "easy", "amount": 2}),

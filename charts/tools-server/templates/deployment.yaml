@@ -27,6 +27,12 @@ spec:
           ports:
             - name: http
               containerPort: 8000
+          env:
+            - name: TMDB_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret }}
+                  key: TMDB_API_TOKEN
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

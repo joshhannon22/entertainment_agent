@@ -10,29 +10,33 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from tools import (
+    TMDB_TOKEN,
     find_free_games,
     find_game_deals,
     get_joke,
     get_trivia,
     search_anime,
     search_books,
+    search_movies,
     search_tv_shows,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)
-
+if not TMDB_TOKEN:
+    logging.getLogger("tools-server").warning("TMDB_API_TOKEN not set: search_movies will return an error")
+    
 mcp = MCPServer(
     "watch-party-tools",
     instructions=(
-        "Entertainment lookups: TV shows (TVMaze), anime (Jikan), PC game deals (CheapShark), "
+        "Entertainment lookups: TV shows (TVMaze), movies (TMDb), anime (Jikan), PC game deals (CheapShark), "
         "free-to-play games (FreeToGame), books (Open Library), trivia (Open Trivia DB), jokes (JokeAPI)."
     ),
 )
 
 # The registry. Adding a tool = write the function in tools.py + add it here.
 for fn in (
-    search_tv_shows, search_anime,
+    search_tv_shows, search_movies, search_anime,
     find_game_deals, find_free_games,
     search_books,
     get_trivia, get_joke,

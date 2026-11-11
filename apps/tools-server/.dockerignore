@@ -1,2 +1,4 @@
 **/__pycache__
 scripts/
+ scripts/.venv
++**/.env
