@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   repository: agent-api
-  tag: v2
+  tag: v3
   pullPolicy: IfNotPresent
 
 service:
@@ -11,6 +11,7 @@ service:
 # Non-secret runtime config -> ConfigMap -> env vars
 config:
   MODEL: gemini-3.8-flash
+  THINKING_LEVEL: low   # matches Phase 1's reasoning_effort=low; see watch_party/agent.py
   ADK_MAX_LLM_CALLS: "6"
   GOOGLE_GENAI_USE_VERTEXAI: "FALSE"
   TOOLS_SERVER_URL: http://tools-server.watch-party.svc.cluster.local/mcp

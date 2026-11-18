@@ -5,10 +5,21 @@ from google.adk.agents import Agent
 from google.adk.agents.readonly_context import ReadonlyContext
 from google.adk.tools.mcp_tool import McpToolset
 from google.adk.tools.mcp_tool.mcp_session_manager import StreamableHTTPConnectionParams
+from google.genai import types
 
 # Local default; in Kubernetes the ConfigMap sets the cluster DNS name.
 TOOLS_SERVER_URL = os.getenv("TOOLS_SERVER_URL", "http://localhost:8001/mcp")
-MCP_TIMEOUT_S = 30.0  # must exceed tools-server's own per-API timeout (TIMEOUT_S = 10)
+MCP_TIMEOUT_S = 30.0  # must exceed tools-server's per-tool-call deadline (TOOL_DEADLINE_S = 20)
+
+# Gemini 3 thinks at its default level unless told otherwise, and thinking tokens bill at the
+# output rate (78% of output tokens on one Phase 2 turn). "low" matches Phase 1's
+# reasoning_effort=low, so loop-vs-ADK and single-vs-multi-agent numbers compare like for like.
+# Like reasoning_effort, it's a hint, not a cap. minimal / low / medium / high, or "default"
+# to send no thinking config (Gemini's own default), for before/after comparisons.
+THINKING_LEVEL = os.getenv("THINKING_LEVEL", "low").upper()
+GENERATE_CONFIG = None if THINKING_LEVEL == "DEFAULT" else types.GenerateContentConfig(
+    thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel(THINKING_LEVEL))
+)
 
 tools_server = McpToolset(
     connection_params=StreamableHTTPConnectionParams(
@@ -39,5 +50,6 @@ root_agent = Agent(
     model=os.getenv("MODEL", "gemini-3.8-flash"),
     description="Entertainment concierge: TV shows, PC game deals, and books.",
     instruction=build_instruction,
+    generate_content_config=GENERATE_CONFIG,
     tools=[tools_server],
 )

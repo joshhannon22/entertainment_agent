@@ -227,3 +227,11 @@ Same prompt, same settings. One run thought for ~357 tokens, the other didn't th
 - FreeToGame has no co-op tag; `Literal` enums in the function signature become JSON-schema `enum`s through the MCP SDK, which keeps the model from inventing one.
 
 **Feature request (MCP Python SDK):** an optional per-tool `timeout`/deadline in `@mcp.tool()` that cancels a slow sync tool and returns a structured error to the client, so servers don't each reinvent "total deadline" around their HTTP clients.
+
+## 2026-11-17: Phase 3b, ADK's LLM-call cap is an exception, not an outcome
+
+**What happened:** an eval run with default thinking got `HTTP 500` on "How much is Hades on PC right now?". The model made one sequential `find_game_deals` call per LLM call (6 in 18 s) instead of answering. On the 7th call ADK raised `LlmCallsLimitExceededError` (`ADK_MAX_LLM_CALLS=6`) out of `runner.run_async`. ADK 2.x wraps it in `DynamicNodeFailError` internally, then the runner re-raises the inner error. Our `/chat` only caught `genai.errors.APIError`, so it became a 500, the connection dropped mid-request, and that killed `kubectl port-forward`, so all 14 remaining eval requests failed with `ConnectError`. Found with `kubectl logs deploy/agent-api --since=30m | grep -v healthz | grep -n Error` (the pod had 0 new restarts, which ruled out a crash).
+
+**Workaround:** catch `LlmCallsLimitExceededError` in `/chat` and return 200 with `answer: null, stop_reason: "max_llm_calls"` plus the partial trajectory. Same rule as Phase 1's `max_steps`: hitting a guardrail is an outcome to report, not a server fault. The eval runner now stops after 3 unreachable requests in a row instead of recording junk.
+
+**Feature request (ADK):** end the run with a final event that carries a stop reason (`max_llm_calls`, plus the partial trajectory) instead of raising, or make that behavior a `RunConfig` option. Every serving layer has to rediscover this, and an unhandled cap turns a guardrail into an outage signal.

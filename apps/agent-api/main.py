@@ -10,6 +10,7 @@ import time
 import uuid
 
 from fastapi import FastAPI, HTTPException
+from google.adk.agents.invocation_context import LlmCallsLimitExceededError
 from google.adk.agents.run_config import RunConfig, ToolThreadPoolConfig
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
@@ -47,8 +48,12 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     answer: str | None
+    # Why the turn ended: "stop" (answered), "max_llm_calls" (hit ADK_MAX_LLM_CALLS), or
+    # "empty_response". Facts only; the caller decides what to tell the user (Phase 1 rule).
+    stop_reason: str
     session_id: str
     served_by: str
+    model: str   # so evals price the tokens with the model that actually ran, not a guess
     tool_calls: list[str]
     llm_calls: int
     prompt_tokens: int
@@ -89,6 +94,7 @@ async def chat(req: ChatRequest) -> ChatResponse:
     new_message = types.Content(role="user", parts=[types.Part(text=req.message)])
 
     answer = None
+    stop_reason = None
     tool_calls: list[str] = []
     llm_calls = prompt_tokens = output_tokens = thinking_tokens = 0
     start = time.perf_counter()
@@ -107,20 +113,29 @@ async def chat(req: ChatRequest) -> ChatResponse:
             tool_calls += [fc.name for fc in event.get_function_calls()]
             if event.is_final_response() and event.content and event.content.parts:
                 answer = "".join(p.text for p in event.content.parts if p.text) or None
+    except LlmCallsLimitExceededError:
+        # The step cap is a guardrail doing its job (the model kept calling tools), not a
+        # server fault. Return what we know with 200 instead of letting it escape as a 500.
+        log.warning("session=%s hit max_llm_calls after tools=%s", session.id, tool_calls)
+        stop_reason = "max_llm_calls"
     except genai_errors.APIError as e:
         log.error("LLM call failed: %r", e)
         raise HTTPException(status_code=502, detail=f"LLM provider error ({e.code})")
     latency_s = round(time.perf_counter() - start, 2)
+    if stop_reason is None:
+        stop_reason = "stop" if answer else "empty_response"
 
     log.info(
-        "chat session=%s host=%s tools=%s llm_calls=%d tokens=%d/%d/%d latency=%.2fs",
-        session.id, HOSTNAME, tool_calls, llm_calls,
+        "chat session=%s host=%s stop=%s tools=%s llm_calls=%d tokens=%d/%d/%d latency=%.2fs",
+        session.id, HOSTNAME, stop_reason, tool_calls, llm_calls,
         prompt_tokens, output_tokens, thinking_tokens, latency_s,
     )
     return ChatResponse(
         answer=answer,
+        stop_reason=stop_reason,
         session_id=session.id,
         served_by=HOSTNAME,
+        model=root_agent.model,
         tool_calls=tool_calls,
         llm_calls=llm_calls,
         prompt_tokens=prompt_tokens,

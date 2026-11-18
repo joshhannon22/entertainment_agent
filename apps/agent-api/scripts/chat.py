@@ -46,7 +46,7 @@ def main() -> None:
 
             data = resp.json()
             session_id = data["session_id"]
-            console.print(Panel(Markdown(data["answer"] or "_(no answer)_"), title="agent", border_style="green"))
+            console.print(Panel(Markdown(data["answer"] or f"_(no answer: {data.get('stop_reason', '?')})_"), title="agent", border_style="green"))
             tools = ", ".join(data["tool_calls"]) or "none"
             console.print(
                 f"[dim]pod={data['served_by']}  session={session_id[:8]}  tools={tools}  "
