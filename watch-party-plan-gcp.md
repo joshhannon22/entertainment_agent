@@ -5,6 +5,8 @@ A hands-on learning project for moving from cloud engineering into **Forward Dep
 The agent answers questions like *"I've got 3 hours tonight, I liked Arcane, what should I watch or play?"* To do that it calls free public APIs (TV, anime, games, books, trivia) as tools, searches its own vector index for "something like X" questions, and queries a small structured catalog for "top-rated / filter by year" questions. It starts as a hand-written agent loop, gets rebuilt on Google's **Agent Development Kit (ADK)**, runs on Kubernetes locally, moves through GitOps, and finishes as a **private, locked-down agent platform on Google Cloud**.
 
 > **What changed in this version (Oct 2026):** retargeted at the Google Cloud FDE / Customer Engineer postings. Gemini becomes the default model, ADK is added as the agent SDK right after the hand-written loop, multi-agent work and session state moved from "stretch" into the core path, a structured-data tool was added next to RAG, Phase 7 moves from Azure to GCP, and a light "FDE habits" track was added for the customer-facing half of the job. Phase 0 is unchanged.
+>
+> **What changed (Nov 17 2026): build mode.** Phases 0–3 were the deep, type-every-line learning. From here on **Claude writes and edits the code, and Josh runs and validates each step** (build, deploy, curl, evals). The goal is a working end-to-end system, understood at the level of architecture, data flow, decisions and failure modes, not every line. Phases 3b–7 were trimmed to match: steps were merged into fewer checkpoints, each with a validation command; A2A, the quota demo and per-phase recorded demos moved to "Only if curious"; one demo at the end of Phase 7 remains.
 
 ---
 
@@ -51,18 +53,20 @@ The core path below is what grows the skill set. Everything else lives in **"Onl
 - **Phase 1b** — rebuild the same agent in ADK. Short, and it's the single biggest alignment fix for the Google roles. ✅ done.
 - **Phases 2–4** — containerize, MCP + multi-agent, RAG + structured data. The real new material. Phase 2 ✅. **📍 In progress: Phase 3 ("done when" ✅; TMDb ✅; retries left). See the "Where we left off" note in the Phase 3 section.**
 - **Phase 5 (trimmed)** — Argo CD and pull-based GitOps.
-- **Phase 6 (trimmed)** — NetworkPolicies, sessions/state, LLM metrics and traces, guardrails, RBAC + quotas.
-- **Phase 7** — the capstone on GCP. Private GKE, private access to Vertex AI, VPC Service Controls, Workload Identity, Secret Manager, controlled egress, all through Terraform — plus one comparison deploy to Google's managed agent runtime.
+- **Phase 6 (trimmed)** — persistent sessions, NetworkPolicies + per-workload ServiceAccounts, LLM metrics and traces, guardrails.
+- **Phase 7** — the capstone on GCP. Private GKE, private access to Vertex AI, VPC Service Controls, Workload Identity, Secret Manager, controlled egress, all through Terraform — plus one comparison deploy to Cloud Run and Google's managed agent runtime.
+
+**Rough pacing in build mode** (sessions of a few hours): finish Phase 3 — 1 · Phase 3b — 1–2 · Phase 4 — 2–3 · Phase 5 — 1–2 · Phase 6 — 2–3 · Phase 7 — 3–4. If a phase runs well past its estimate, stop and cut scope rather than push through.
 
 ---
 
 ## FDE habits — the customer-facing half, done cheaply
 
-Every Google FDE and CE posting asks for "technical discovery sessions with customers," reusable assets, and a feedback loop to product. You can't get customers from a side project, but you can produce the artifacts that prove you work that way. Each is short; do them as you go, not as a separate phase.
+Every Google FDE and CE posting asks for "technical discovery sessions with customers," reusable assets, and a feedback loop to product. You can't get customers from a side project, but you can produce the artifacts that prove you work that way. Each is short; do them as you go, not as a separate phase. **Claude drafts these; Josh skims and edits.**
 
-- **Discovery brief before each phase** (`docs/discovery/phase-N.md`, half a page): the "customer" problem, success metric, constraints, what's out of scope. Practising the questions is the point
-- **Architecture one-pager** before Phase 3 and Phase 7 — the kind of thing you'd walk a customer's platform team through
-- **A 5-minute recorded demo** at the end of Phases 1b, 4 and 7. CE roles are hired partly on demo skill
+- **Discovery brief before each phase** (`docs/discovery/phase-N.md`, half a page): the "customer" problem, success metric, constraints, what's out of scope
+- **Architecture one-pager** before Phase 3 (✅ done) and Phase 7 — the kind of thing you'd walk a customer's platform team through
+- **One 5-minute recorded demo** at the end of Phase 7, covering the whole system. CE roles are hired partly on demo skill. (Earlier per-phase demos are optional.)
 - **Field notes → feature requests** (`docs/field-notes.md`): every time ADK, MCP or a GCP service fights you, write what happened, the workaround, and the feature you'd ask product for. Turn the best one into a real GitHub issue or PR on the ADK repo. That is the "feedback loop to product" bullet, evidenced
 - **Reusable module:** by Phase 7 the tools-server and the Terraform module should be clean enough that someone else could drop them into their own project. That's the "convert field patterns into reusable modules" bullet
 
@@ -179,7 +183,7 @@ watch-party/
 
 ## The phases
 
-Each numbered step is sized for one work session. Check it off when you can show the "done when" result.
+**Phases 0–3 (learning mode):** Josh typed every change; the long notes below are the record of that. **From the rest of Phase 3 onward (build mode):** each step is a checkpoint, not a session. Claude writes the code, preflights it (lint, `helm template`, offline tests) and hands over a validation block; Josh runs it and pastes the output. A step is checked off when its validation passes, with 3–5 bullets of notes. A phase is done when its "done when" is shown.
 
 ### Phase 0 — Kubernetes fundamentals (no AI yet) ✅ COMPLETE
 
@@ -399,11 +403,10 @@ Each numbered step is sized for one work session. Check it off when you can show
 > - **Cluster state** (kind `watch-party`, kubectl context namespace = `watch-party`): `tools-server` (image `v3`, 2 replicas, 8 tools, Helm rev 3), `agent-api` (image `v2`, 1 replica, Helm rev 1), hand-made Secrets `agent-api-secrets` and `tools-server-secrets`. Nothing in `default`. Nothing on GCP.
 > - **If the cluster is gone:** `kubectl create namespace watch-party && kubectl config set-context --current --namespace=watch-party`; recreate both Secrets (Phase 2 step 3 and Phase 3 step 3 commands); `docker build -t tools-server:v3 apps/tools-server && docker build -t agent-api:v2 apps/agent-api`; `kind load docker-image tools-server:v3 agent-api:v2 --name watch-party`; `helm install tools-server charts/tools-server && helm install agent-api charts/agent-api`.
 > - **Local dev:** `cd apps/tools-server && uvicorn server:app --port 8001 --env-file .env`; `cd apps/agent-api && uvicorn main:app --port 8000 --env-file watch_party/.env` (defaults to `http://localhost:8001/mcp`); `python apps/agent-api/scripts/chat.py [--url http://localhost:8080]`.
-> - **Next step:** retries/backoff. Move the original 3 tools onto `_get_json`, add retry on 429/5xx with backoff, and a **total deadline** (httpx `timeout` is per attempt: Jikan took 20 s for a "10 s" timeout); keep it under agent-api's 30 s MCP timeout. Re-test `search_anime` once Jikan is reachable (its happy path has never run).
-> - **Open quick-checks (answer at the start, 1–2 sentences each):** (1) why doesn't `sessionAffinity: ClientIP` fix the session problem in production? (2) In Phase 7, which DNS hop has to change so `aiplatform.googleapis.com` resolves to a private IP? (3) `get_trivia`'s 5 s lock is per process: with 2 tools-server replicas, what can still go wrong? (4) After rotating `tools-server-secrets` with `kubectl apply`, does a no-change `helm upgrade tools-server` give the pods the new token? Why or why not?
-> - **Retries not started.** No code written for it yet; start the session with the shape + chunk 1 for it.
-> - **Carry-overs:** ADK thinking level still not matched to Phase 1's `reasoning_effort=low` (fix before Phase 3b cost comparisons); prompt tokens grow per turn (17.7k by turn 6) since all tool output is resent: measure in 3b/6; ADK "silent toolset drop" is a candidate upstream issue (field notes 2026-11-06).
-> - Working style this session: user typed chunks 1–3; Claude wrote the 4 new tools at the user's explicit request. Default is still "user types the code".
+> - **Next step:** retries/backoff (not started, no code yet). Claude writes it in one pass: move the original 3 tools onto `_get_json`, retry on 429/5xx/timeouts with jittered backoff, and a **total deadline** per tool call (httpx `timeout` is per attempt: Jikan took 20 s for a "10 s" timeout), kept under agent-api's 30 s MCP timeout. Josh validates: `python tools.py` smoke table, `scripts/smoke.py`, then `tools-server:v4` → `kind load` → `helm upgrade` → one in-cluster `/chat`. Re-test `search_anime` if Jikan is reachable (its happy path has never run). Then straight into Phase 3b.
+> - **Carry-overs:** ADK thinking level still not matched to Phase 1's `reasoning_effort=low` (first thing in Phase 3b, before cost comparisons); prompt tokens grow per turn (17.7k by turn 6) since all tool output is resent: measure in 3b/6; ADK "silent toolset drop" is a candidate upstream issue (field notes 2026-11-06).
+> - **Interview prep, not blocking** (worth being able to answer out loud): (1) why doesn't `sessionAffinity: ClientIP` fix the session problem in production? (2) In Phase 7, which DNS hop has to change so `aiplatform.googleapis.com` resolves to a private IP? (3) `get_trivia`'s 5 s lock is per process: with 2 tools-server replicas, what can still go wrong? (4) After rotating `tools-server-secrets` with `kubectl apply`, does a no-change `helm upgrade tools-server` give the pods the new token?
+> - **Working style from 2026-11-17: build mode** (see CLAUDE.md). Claude writes and edits all files; Josh runs the validation commands.
 
 - [x] Move the tools into `tools-server` as an MCP server using the Python MCP SDK over streamable HTTP
   - **Step 1 ✅ (2026-11-06).** `apps/tools-server/{server.py, tools.py, requirements.txt, scripts/smoke.py}`, `mcp==2.3.0`. `server.py` registers the unchanged `tools.py` functions with `mcp.tool()(fn)` (the registry), adds `/healthz` via `custom_route`, and exposes `mcp.streamable_http_app(stateless_http=True, json_response=True, host="0.0.0.0")` for uvicorn. Run: `uvicorn server:app --port 8001`; `python scripts/smoke.py` = `tools/list` + one `tools/call`, no LLM.
@@ -438,6 +441,7 @@ Each numbered step is sized for one work session. Check it off when you can show
   - **`ndots:5` cost:** a name with < 5 dots tries every search suffix first, so each external lookup is ~4 queries (3 NXDOMAINs + the real one). Fixes: `dnsConfig` `ndots` lower, or trailing-dot FQDNs.
   - **Gotchas:** first attempt ran `nslookup` on the Mac (interactive `kubectl run -it … sh` didn't attach), resolver `2603:…::1` = home router → every cluster name NXDOMAIN; cluster DNS only exists inside the cluster. **busybox `nslookup` skips the search list for dotted names** (`tools-server.watch-party` → NXDOMAIN), while the app's glibc resolver resolves it: verified with `kubectl exec deploy/agent-api -- python -c "import socket; print(socket.getaddrinfo('tools-server.watch-party', 80))"`. Debug with the resolver the app actually uses. Non-interactive form: `kubectl run debug --rm -i --image=busybox:1.36 --restart=Never -- sh -c 'nslookup tools-server'`.
 - [ ] Add timeouts, retries with backoff, and clean error messages to every tool
+  - Scope: all tools on `_get_json`; retry 429/5xx/timeouts (honor `Retry-After`), jittered backoff, total deadline per call < agent-api's 30 s MCP timeout; no retry on other 4xx. **Validate:** smoke table + `scripts/smoke.py` green; `tools-server:v4` deployed; one in-cluster `/chat` answers.
 - [x] *FDE habit:* the architecture one-pager for the two-service design
   - `docs/architecture-phase-3.md` (diagram, responsibilities table, per-turn data flow, failure modes, security posture now → Phase 6 → Phase 7) and `docs/discovery/phase-3.md` (2026-11-06).
 
@@ -448,11 +452,11 @@ Each numbered step is sized for one work session. Check it off when you can show
 
 **Goal:** cover the "multi-agent systems, ReAct, self-reflection, hierarchical delegation" line from the Google FDE postings with something real.
 
-- [ ] Split the single agent into a **root router agent** plus specialists: `tv_agent`, `games_agent`, `books_agent`. Each specialist only sees its own tools. This is hierarchical delegation
-- [ ] Add a **critic / self-reflection step**: before the final answer goes out, a reviewer agent checks it against the user's constraints ("3 hours", "co-op", "not horror") and sends it back once if it fails. Use one of ADK's workflow agents (sequential or loop) for this
-- [ ] Extend the evals with 5 multi-domain questions ("a show and a game for tonight") and check the router delegates correctly
-- [ ] Compare cost and latency single-agent vs multi-agent on the same eval set. Write the result in `docs/decisions.md` — "multi-agent isn't free" is an answer interviewers like
-- [ ] Optional, one session: expose one specialist over **A2A** (Agent2Agent) as its own service and have the router call it remotely. Skip if Phase 3b is already taking long
+*Target: 1–2 sessions.*
+
+- [ ] **Baseline first:** match ADK's thinking level to Phase 1's `reasoning_effort=low` (carry-over), then run the current eval set once and save it as the single-agent baseline (`--out`). Without this the comparison below is meaningless
+- [ ] **Router + specialists + critic** in `watch_party/`: a root router delegating to `tv_agent` (TV, anime, movies), `games_agent`, `books_agent`, each seeing only its own MCP tools (tool filter on the toolset). A **critic** checks the draft against the user's constraints ("3 hours", "co-op", "not horror") and sends it back once if it fails, via an ADK workflow agent (sequential or loop). This is hierarchical delegation + self-reflection. **Validate:** `adk web` trace for "a show and a game for tonight" shows two specialists; in-cluster `/chat` still works after redeploying agent-api
+- [ ] **Evals + comparison:** add 5 multi-domain questions (router delegates correctly) and at least one case built to trip the critic. Run single vs multi on the same set: pass rate, p50/p95 latency and cost, LLM calls per request. Claude writes `docs/decisions.md` → "multi-agent isn't free" from the numbers
 
 **Concepts:** routing, delegation, reflection loops, workflow agents, the cost of extra LLM calls.
 **Done when:** a multi-domain question is routed to two specialists, the critic catches at least one bad answer in the eval set, and you have the single- vs multi-agent numbers.
@@ -461,15 +465,12 @@ Each numbered step is sized for one work session. Check it off when you can show
 
 **Goal:** handle questions keyword APIs can't answer, over both unstructured text and a structured table.
 
-- [ ] Install Qdrant via its Helm chart. Look at the StatefulSet and PersistentVolumeClaim it creates
-- [ ] Install a small Postgres (Helm chart) for the structured catalog
-- [ ] Write an `ingest` job that pulls a few thousand TVMaze shows (paginated `/shows` endpoint), top anime from Jikan, and a few Open Library subjects. It cleans and chunks the synopses, embeds them with `fastembed`, and upserts them with metadata (genre, year, rating, source) into Qdrant. **The same job writes the structured fields** (title, type, year, rating, genres, seasons/episodes, runtime) into a Postgres `catalog` table
-- [ ] Run it first as a Kubernetes **Job**, then as a weekly **CronJob**. Make it idempotent so re-runs don't duplicate rows
-- [ ] Add a `semantic_search` tool with metadata filters, e.g. `type=anime`, `year>2015`
-- [ ] Add a `query_catalog` tool for structured questions. Start with a parameterized query tool (filters as arguments, read-only DB user), not free-form text-to-SQL — and write down why
-- [ ] Extend the evals with 5 "similar to X" questions and 5 structured questions. Check the agent picks the right tool for each type, and add a groundedness check (did the answer only use retrieved results?)
-- [ ] Delete the Qdrant and Postgres pods and confirm the data survives through the PVCs
-- [ ] *FDE habit:* recorded demo; `docs/decisions.md` → "RAG vs structured query: how the agent decides"
+*Target: 2–3 sessions.*
+
+- [ ] **Data stores:** Qdrant (official Helm chart) and a small Postgres (Helm chart) in `watch-party`, pinned chart versions, values files in the repo. Postgres gets an admin user plus a **read-only** user for the agent's tools. Note the StatefulSet + PVC each creates (Azure analogy: managed disk per replica). **Validate:** both pods Ready; `kubectl get pvc` Bound; `psql` and Qdrant `/collections` reachable from a throwaway pod
+- [ ] **`ingest` as a Job, then a weekly CronJob** (`apps/ingest/` + `charts/ingest/`): pulls a few thousand TVMaze shows (paginated `/shows`), top anime from Jikan, a few Open Library subjects; cleans and chunks synopses, embeds with `fastembed`, upserts into Qdrant with metadata (type, genres, year, rating, source); writes the structured fields (title, type, year, rating, genres, seasons/episodes, runtime) into a Postgres `catalog` table. **Idempotent**: deterministic point IDs + `ON CONFLICT` upserts. **Validate:** Job completes; row and point counts; a second run leaves the counts unchanged
+- [ ] **Two new tools in tools-server:** `semantic_search(query, type?, min_year?, …)` with metadata filters, and `query_catalog(...)` as a **parameterized** query tool (filters as arguments, read-only DB user), not free-form text-to-SQL. Claude writes `docs/decisions.md` → "RAG vs structured query: how the agent decides" and why no text-to-SQL. **Validate:** smoke calls for both; in-cluster `/chat` for "anime like Cowboy Bebop but newer" and "highest-rated sci-fi shows since 2018"
+- [ ] **Evals + persistence:** 5 "similar to X" + 5 structured questions checking the right tool per type, plus a groundedness check (the answer only uses retrieved results). Then delete the Qdrant and Postgres pods and confirm the data survives through the PVCs
 
 **Concepts:** embeddings, chunking, metadata filtering, structured vs unstructured retrieval, safe database tools, hybrid answers (RAG + SQL + live APIs), StatefulSets, PVCs, Jobs/CronJobs.
 **Done when:** "anime like Cowboy Bebop but newer" comes from the vector index, "highest-rated sci-fi shows since 2018" comes from the catalog table, and both are in the eval set.
@@ -480,13 +481,12 @@ Each numbered step is sized for one work session. Check it off when you can show
 
 > **Trim note:** CI itself is already familiar territory from Azure DevOps. Build the pipeline, but don't sink sessions into GitHub Actions syntax. The genuinely new idea here is **pull-based deployment** — a controller inside the cluster reconciling against Git, rather than a pipeline pushing changes in. That's the part to understand deeply.
 
-- [ ] GitHub Actions on push: lint, unit tests, build images, push to GHCR tagged with the commit SHA. Keep it simple
-- [ ] Install Argo CD in kind. Create an app-of-apps in `gitops/` that deploys all three charts plus Qdrant and Postgres
-- [ ] Have CI open a commit (or PR) that bumps the image tag in `gitops/envs/local/`. Argo CD then syncs the change
-- [ ] Add the eval run (your script and/or `adk eval`) as a CI step that fails the build if pass rate drops below a threshold
-- [ ] Practice drift: `kubectl edit` a deployment by hand and watch Argo revert it
-- [ ] Practice rollback by reverting the Git commit
-- [ ] Write the "why GitOps" paragraph in `docs/decisions.md` — how pull-based reconciliation differs from the push model you already use, and what that buys you in a regulated environment (no cluster credentials in the pipeline, Git as the audit trail)
+*Target: 1–2 sessions.*
+
+- [ ] **CI:** GitHub Actions on push: lint, offline unit tests, build images, push to GHCR tagged with the commit SHA. Then a job that commits the new tag into `gitops/envs/local/`. Keep it simple. **Validate:** a push produces SHA-tagged images and a tag-bump commit
+- [ ] **Argo CD:** install in kind; app-of-apps in `gitops/` deploying agent-api, tools-server, ingest, Qdrant and Postgres (Secrets stay hand-made). Move the current Helm releases under Argo. **Validate:** all apps Synced/Healthy; a merged tag bump rolls the pods with no kubectl from you
+- [ ] **Eval gate:** run the eval script (and/or `adk eval`) in CI and fail the build below the threshold. Needs a Gemini key as a repo secret and a small case subset to keep cost and time down
+- [ ] **Drift + rollback drill:** `kubectl edit` a deployment by hand and watch Argo revert it; then revert a Git commit and watch it roll back. Claude writes the "why GitOps" paragraph in `docs/decisions.md` (pull vs push, no cluster credentials in the pipeline, Git as the audit trail)
 
 **Concepts:** push vs pull deployment, declarative state, drift detection, evals as a quality gate.
 **Done when:** a merged PR changes what's running in the cluster without you touching kubectl.
@@ -495,23 +495,18 @@ Each numbered step is sized for one work session. Check it off when you can show
 
 **Goal:** the production layer — the "state-management issues", "granular tracing" and "LLM-native metrics" from the Google FDE postings, plus the platform controls the bank roles want.
 
-**In scope — do these five:**
+*Target: 2–3 sessions.*
 
-- [ ] **Session state:** move ADK sessions from in-memory to a persistent session store backed by the Postgres you already run (ADK has a database-backed session service). Re-run the Phase 2 three-replica test and confirm a conversation survives turns landing on different pods and a pod restart. Add one piece of long-lived memory ("I don't like horror") and decide what belongs in session state vs user memory
-- [ ] **NetworkPolicies:** recreate the kind cluster with Calico, since kind's default networking doesn't enforce policies. Then set default-deny, and allow agent → tools-server, agent → Qdrant/Postgres, and tools-server → internet egress on 443 plus DNS on 53. Verify that agent-api *cannot* reach the internet directly. This is the local rehearsal for Phase 7's egress story
-- [ ] **RBAC and quotas:** give each workload its own ServiceAccount with least privilege. Add a `ResourceQuota` and `LimitRange` per namespace, and prove it by trying to deploy something that exceeds the quota
-- [ ] **LLM metrics and traces:** install kube-prometheus-stack and expose custom metrics — tool calls per API, error rate, input/output tokens, **tokens/sec**, **cost per request**, and latency per agent. Add OpenTelemetry so one trace shows the whole chain (user request → router → specialist → LLM call → MCP tool → external API). Make the token/cost panel real — that's what distinguishes LLM observability from ordinary APM
-- [ ] **Guardrails:** limit max steps and max tokens per request, validate tool inputs, and add a basic prompt-injection check, since API data is untrusted text going into the prompt. Add safety cases to the eval set so "safety" is measured, not just claimed
+- [ ] **Session state:** ADK's database-backed session service on the Postgres you already run (its own database/user, separate from `catalog`). Add one piece of long-lived memory ("I don't like horror") and decide what belongs in session state vs user memory. **Validate:** re-run the Phase 2 three-replica in-cluster test: follow-ups on other pods and after `kubectl rollout restart` keep the conversation (no 404s)
+- [ ] **NetworkPolicies + ServiceAccounts:** recreate kind with Calico (kind's default CNI doesn't enforce policies; the cluster rebuild is Josh's call). Default-deny; allow agent → tools-server, agent/tools/ingest → Qdrant/Postgres, tools-server + ingest → internet on 443, everyone → DNS on 53. Each chart gets its own ServiceAccount with `automountServiceAccountToken: false` (sets up Workload Identity in Phase 7). **Validate:** `kubectl exec deploy/agent-api` curl to `api.tvmaze.com` **fails**; the same from tools-server works; `/chat` still answers
+- [ ] **LLM metrics and traces:** kube-prometheus-stack + custom metrics: tool calls per API, error rate, input/output/thinking tokens, **tokens/sec**, **cost per request**, latency per agent. OpenTelemetry so one trace spans user request → router → specialist → LLM call → MCP tool → external API (Jaeger or Tempo locally). A Grafana dashboard with a real token/cost panel, which is what separates LLM observability from ordinary APM. **Validate:** run the eval set, then see the dashboard move and open one full trace
+- [ ] **Guardrails:** max steps and max tokens per request, tool input validation, and a basic prompt-injection check on tool output (API data is untrusted text going into the prompt). Add safety cases to the eval set so safety is measured, not claimed
+- [ ] **Readiness docs (Claude drafts):** `docs/operational-readiness.md` checklist (probes, limits, dashboard, alert, runbook, no secrets in Git, rollback tested, eval gate green) and two short runbooks in `docs/runbooks/` ("tools-server returning 5xx", "eval pass rate dropped after a deploy") with the real commands
 
-**Also, cheap and worth it:**
-
-- [ ] Write `docs/operational-readiness.md` — a short checklist the agent has to pass before it's considered live (probes defined, resource limits set, dashboard exists, alert exists, runbook exists, secrets not in Git, rollback path tested, eval gate green)
-- [ ] Write two runbooks in `docs/runbooks/` — e.g. "tools-server is returning 5xx" and "eval pass rate dropped after a deploy". Short, numbered, with the actual commands
-
-**Explicitly out of scope here:** Gateway API, cert-manager, Redis caching, HPA and load testing. See "Only if curious".
+**Explicitly out of scope here:** ResourceQuota/LimitRange demos, Gateway API, cert-manager, Redis caching, HPA and load testing. See "Only if curious".
 
 **Concepts:** session state and memory, zero-trust networking, egress control, multi-tenancy, LLM observability and cost visibility, AI security basics, operational readiness.
-**Done when:** a conversation survives a pod restart; a Grafana dashboard shows requests, tool usage, tokens/sec and cost per request; one trace spans router → specialist → tool → external API; a NetworkPolicy test proves agent-api can't reach the internet directly; and the readiness checklist is honestly passable.
+**Done when:** a conversation survives a pod restart and turns on different replicas; a Grafana dashboard shows requests, tool usage, tokens/sec and cost per request; one trace spans router → specialist → tool → external API; a NetworkPolicy test proves agent-api can't reach the internet directly; and the readiness checklist is honestly passable.
 
 ### Phase 7 — The capstone: a private agent platform on Google Cloud
 
@@ -524,17 +519,16 @@ Most agent portfolios deploy to a public endpoint and stop. The FDE posting desc
 > **Azure → GCP translation table** (write this into `docs/decisions.md` as you go — being able to say "this is the GCP equivalent of X" is valuable in a Google interview *and* with customers migrating from Azure):
 > VNet → VPC · AKS → GKE · ACR → Artifact Registry · Key Vault + CSI → Secret Manager (+ CSI / GKE add-on) · AKS Workload Identity → Workload Identity Federation for GKE · Private Endpoint → Private Service Connect / Private Google Access · Private DNS zones → Cloud DNS private zones · NAT Gateway / Azure Firewall → Cloud NAT + Cloud NGFW / Secure Web Proxy · Azure Policy → Org Policy · (no direct Azure equivalent) → VPC Service Controls · Azure OpenAI → Vertex AI (Gemini) · Azure AI Search → Vertex AI Vector Search / RAG Engine
 
-- [ ] In `infra/`: a single Terraform root module with a project-level setup (APIs enabled), a **custom-mode VPC** with segmented subnets, a **private GKE cluster** (private nodes, private control-plane endpoint, one small node pool autoscaling 0–2 — or Autopilot; write down which and why), and Artifact Registry. Remote state in a GCS bucket
-- [ ] **Private access to Google APIs:** nodes have no public IPs; reach Vertex AI, Artifact Registry, Secret Manager and BigQuery through **Private Google Access / Private Service Connect** with Cloud DNS private zones so in-cluster resolution lands on private paths. This is the centerpiece — get it working and document it
-- [ ] **VPC Service Controls:** put Vertex AI, BigQuery and Cloud Storage inside a service perimeter so data can't be exfiltrated to a project outside it. This is the GCP control banks care most about and the one most Azure engineers have never used — it's your best "I already think like your regulated customers" talking point
-- [ ] **Workload Identity Federation for GKE + Secret Manager** so no keys or secrets live in the cluster. The agent's Kubernetes ServiceAccount maps to a Google service account with exactly the Vertex AI and BigQuery roles it needs. CI uses **keyless Workload Identity Federation** from GitHub Actions to push to Artifact Registry — no JSON keys anywhere
-- [ ] **Egress control:** the public APIs still have to be reachable. Cloud NAT for outbound, plus an FQDN allowlist (Cloud NGFW FQDN rules or Secure Web Proxy) for `api.tvmaze.com` and friends, and nothing else. Write up the design decision
-- [ ] **Swap to Google services by configuration, not rewrites:** the LLM client points at **Gemini on Vertex AI** (service-account auth instead of an API key); the `catalog` moves to **BigQuery** and `query_catalog` runs against it with a read-only role; embeddings move to Vertex AI. Keep **Qdrant on GKE** as the vector store by default (cheap); optionally spend one session swapping `semantic_search` to Vertex AI Vector Search or RAG Engine, then tear that down — managed vector endpoints bill while idle, so check pricing first
-- [ ] Bootstrap Argo CD on GKE from the same `gitops/` repo with an `envs/gke/` overlay. Export OTel traces to **Cloud Trace** and metrics to **Cloud Monitoring**, and rebuild the token/cost panel there
-- [ ] **One comparison deploy:** deploy the same ADK agent to **Cloud Run** and to Google's **managed agent runtime** (the deploy target ADK calls Agent Engine / Agent Runtime — check the current product name), alongside GKE. Write `docs/decisions.md` → "GKE vs Cloud Run vs managed agent runtime: when would I recommend each to a customer?" This is almost certainly an interview question for the FDE and CE roles. Tear the extra two down the same day
-- [ ] Write `docs/decisions.md` entries for the private-networking choices — how DNS resolution works end to end, what the VPC-SC perimeter blocks, how egress is controlled, where the audit evidence lives (Cloud Audit Logs)
-- [ ] `make down` runs `terraform destroy`. **Tear it down after every session.** Set a billing budget with alerts before the first `apply`
-- [ ] *FDE habit:* architecture one-pager + 5-minute recorded demo of the full private deployment
+*Target: 3–4 sessions.* Claude writes the Terraform and runs `fmt`/`validate`/`plan`; **Josh runs every `apply` and `destroy`.** Claude drafts the architecture one-pager (`docs/architecture-phase-7.md`) and `docs/discovery/phase-7.md` before the first apply.
+
+- [ ] **Foundation (`infra/`):** billing budget with alerts **before the first apply**; GCS remote state; APIs enabled; a **custom-mode VPC** with segmented subnets; a **private GKE cluster** (private nodes, private control-plane endpoint; Autopilot or a Standard pool autoscaling 0–2, decision written down); Artifact Registry. `make up` / `make down` wrap `terraform apply` / `destroy`. **Validate:** `kubectl get nodes` through the private endpoint; nodes have no external IPs; `make down` leaves nothing behind
+- [ ] **Private access to Google APIs (the centerpiece):** Private Google Access / Private Service Connect for Vertex AI, Artifact Registry, Secret Manager and BigQuery, with Cloud DNS private zones so in-cluster resolution lands on private IPs. **Validate:** from a pod, `getent hosts aiplatform.googleapis.com` returns the private range, and an image pull from Artifact Registry works with no public egress
+- [ ] **Identity with no keys anywhere:** Workload Identity Federation for GKE (each KSA from Phase 6 → its own Google service account with exactly the Vertex AI / BigQuery / Secret Manager roles it needs); secrets from **Secret Manager** instead of hand-made Kubernetes Secrets; GitHub Actions pushes to Artifact Registry with **keyless** Workload Identity Federation. **Validate:** no JSON keys in the repo, CI or cluster; the agent calls Vertex AI with no API key set
+- [ ] **Egress control:** Cloud NAT for outbound plus an FQDN allowlist (Cloud NGFW FQDN rules or Secure Web Proxy) for `api.tvmaze.com` and friends, nothing else. **Validate:** tools work; curl to a site not on the list fails from tools-server
+- [ ] **VPC Service Controls:** Vertex AI, BigQuery and Cloud Storage inside a service perimeter. The GCP control banks care most about and most Azure engineers have never used: your best "I already think like your regulated customers" talking point. **Validate:** a call from inside works; the same call from outside the perimeter (Cloud Shell or laptop) is denied, and the denial shows in Cloud Audit Logs. Start in dry-run mode so a bad perimeter doesn't lock you out
+- [ ] **Google services by configuration, then GitOps on GKE:** Gemini on **Vertex AI** (`GOOGLE_GENAI_USE_VERTEXAI=TRUE`, service-account auth); `catalog` → **BigQuery** with `query_catalog` on a read-only role; embeddings → Vertex AI; Qdrant stays on GKE by default (managed vector endpoints bill while idle). Argo CD bootstrapped from the same `gitops/` with an `envs/gke/` overlay; OTel → **Cloud Trace**, metrics → **Cloud Monitoring**, token/cost panel rebuilt there. **Validate:** the full eval set passes on GKE; one trace in Cloud Trace end to end
+- [ ] **Comparison deploy:** the same ADK agent on **Cloud Run** and Google's **managed agent runtime** (check the current product name), alongside GKE; tear both down the same day. Claude writes `docs/decisions.md` → "GKE vs Cloud Run vs managed agent runtime: when would I recommend each to a customer?", almost certainly an FDE/CE interview question
+- [ ] **Wrap-up:** Claude writes the private-networking `docs/decisions.md` entries (DNS end to end, what the perimeter blocks, how egress is controlled, where audit evidence lives) and the README. Josh records the **one 5-minute demo** of the full system. `make down`, and confirm the bill is flat
 
 **Concepts:** private GKE, Private Google Access / PSC and private DNS, VPC Service Controls, Workload Identity Federation, secret management without secrets, controlled egress, Vertex AI, BigQuery, deployment-target trade-offs, cost control, IaC for AI platforms.
 **Done when:** the agent runs end to end on GKE with **no public IPs on nodes, no keys in the cluster or CI, and Vertex AI/BigQuery inside a VPC-SC perimeter**, deployed entirely through Git, destroyable and rebuildable in one command — and you can draw the network path on a whiteboard from memory.
@@ -543,7 +537,7 @@ Most agent portfolios deploy to a public endpoint and stop. The FDE posting desc
 
 ## Side exercise: accelerators and self-hosted inference
 
-Not a phase. A session or two, slotted in whenever Phase 4 is done. The goal is to **talk about this credibly** — it's the core of the Customer Engineer I, AI Infrastructure role (benchmarks, cost-to-performance, Kubernetes on Google Cloud) and shows up in the bank AI-platform roles too.
+Not a phase, and **optional**: do it after Phase 7, or earlier only if you're actively interviewing for Customer Engineer I, AI Infrastructure. A session or two. The goal is to **talk about this credibly** — it's the core of the Customer Engineer I, AI Infrastructure role (benchmarks, cost-to-performance, Kubernetes on Google Cloud) and shows up in the bank AI-platform roles too.
 
 - [ ] Serve a small model locally with **vLLM on CPU** (or Ollama) exposing the OpenAI-compatible API, and point the Phase 1 client at it by changing only the base URL
 - [ ] Demonstrate the Kubernetes mechanics *without* a GPU: `nvidia.com/gpu` resource requests, node taints and tolerations, `ResourceQuota` limiting accelerators, and what a device plugin does. Deploy a pod that requests a GPU and watch it sit `Pending` with an "Insufficient nvidia.com/gpu" event
@@ -559,6 +553,9 @@ Not a phase. A session or two, slotted in whenever Phase 4 is done. The goal is 
 Skipping all of these is the right default. Pick one up only after Phase 7 is genuinely finished, or if a specific job you're applying to leans on it.
 
 - **LangGraph comparison** — rebuild the Phase 3b router in LangGraph and compare (it's named alongside ADK in Google's postings, and many customers already use it)
+- **A2A (Agent2Agent)** — expose one Phase 3b specialist as its own service and have the router call it remotely (moved out of Phase 3b on 2026-11-17)
+- **ResourceQuota / LimitRange demo** — deploy something that exceeds a namespace quota and watch it fail (moved out of Phase 6; familiar platform ground)
+- **Per-phase recorded demos** — only the end-of-Phase-7 demo is core now
 - **A second, enterprise-shaped use case on the same platform** — e.g. agents over contracts or financial filings. Reuses everything; makes the portfolio look like customer work rather than a hobby domain
 - **An Azure mirror of Phase 7** — the original AKS + Private Link plan. Strong for bank AI-platform roles and Microsoft FDE roles; you mostly know it already
 - **An AWS mirror** (EKS + Bedrock) — for AWS's new FDE org and the AWS-heavy banks
@@ -577,6 +574,7 @@ Skipping all of these is the right default. Pick one up only after Phase 7 is ge
 - **Cost:** kind is free. Use the Gemini API free tier while learning and set a spending cap. On GCP, set a billing budget with alerts before the first `terraform apply`, and destroy after every session.
 - **Secrets:** add `.env` and `*secret*.yaml` to `.gitignore` from day one. Optionally add a gitleaks pre-commit hook.
 - **Scope:** finish each phase's "done when" before starting the next. A working Phase 4 is worth more than a half-built Phase 6. Resist the "Only if curious" list.
+- **Understand, don't memorize:** in build mode the bar is being able to explain each piece's job, the data flow, the key decision and how it fails, not to rewrite it from memory. If you can't explain a piece Claude wrote, ask before moving on.
 - **Product names move fast:** ADK, Vertex AI and the managed agent runtime have been renamed and restructured often. Check the current docs at the start of each phase instead of trusting this plan's wording.
 - **Write as you go:** keep `docs/decisions.md` with one paragraph per choice ("why hand-write the loop first", "why MCP", "RAG vs SQL", "GKE vs Cloud Run vs agent runtime", "why VPC-SC"). It becomes your interview prep.
 
