@@ -235,3 +235,11 @@ Same prompt, same settings. One run thought for ~357 tokens, the other didn't th
 **Workaround:** catch `LlmCallsLimitExceededError` in `/chat` and return 200 with `answer: null, stop_reason: "max_llm_calls"` plus the partial trajectory. Same rule as Phase 1's `max_steps`: hitting a guardrail is an outcome to report, not a server fault. The eval runner now stops after 3 unreachable requests in a row instead of recording junk.
 
 **Feature request (ADK):** end the run with a final event that carries a stop reason (`max_llm_calls`, plus the partial trajectory) instead of raising, or make that behavior a `RunConfig` option. Every serving layer has to rediscover this, and an unhandled cap turns a guardrail into an outage signal.
+
+## 2026-11-17: Phase 3b, AgentTool hides the specialists' work
+
+**What happened:** with specialists wrapped in `AgentTool`, our `/chat` metrics (counted from `runner.run_async` events) would have dropped every specialist LLM call, token and MCP tool call. `AgentTool` runs the agent in its own nested `Runner` with a throwaway `InMemorySessionService`, and its source says it plainly: "The nested run's events are not forwarded to the caller; only the last event's content becomes the response." Multi-agent would have looked cheaper than single-agent because the expensive part was invisible. `adk eval`'s trajectory metric has the same blind spot: it sees `tv_agent`, not `search_tv_shows`. Also, each `AgentTool` call closes the specialist's toolsets (`runner.close()`) when it returns, so two parallel calls to the same specialist share an MCP session that one of them closes.
+
+**Workaround:** count in a `BasePlugin` (`after_model_callback`, `before_tool_callback`). The nested runner inherits the parent's plugins, and a `ContextVar` set per request ties the callbacks back to the request (AgentTool and MCP tools run as asyncio tasks, which copy the context). Proved offline with a scripted fake `BaseLlm`. The router is told to call each specialist at most once per turn.
+
+**Feature request (ADK):** an `AgentTool(forward_events=True)` option, or child events/usage attached to the function-response event, so traces, evals and cost accounting see nested agents without a plugin. And don't close shared toolsets that the nested runner didn't create.

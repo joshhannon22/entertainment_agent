@@ -61,6 +61,9 @@ def run_once(client: httpx.Client, url: str, case: dict, default_model: str) -> 
         "fails": fails,
         "model": model,
         "tools": data["tool_calls"],
+        "agents": data.get("agents_called", []),          # multi-agent only (agent-api >= v4)
+        "revisions": data.get("revisions", 0),
+        "llm_calls_by_agent": data.get("llm_calls_by_agent", {}),
         "llm_calls": data["llm_calls"],
         "prompt_tokens": data["prompt_tokens"],
         "output_tokens": data["output_tokens"],
@@ -89,6 +92,11 @@ def summarize(records: list[dict]) -> dict:
         "cost_p50_usd": p("cost_usd", 50), "cost_p95_usd": p("cost_usd", 95),
         "cost_total_usd": round(sum(r["cost_usd"] or 0 for r in ok), 4),
         "llm_calls_mean": mean("llm_calls"),
+        "revision_rate": round(sum(r["revisions"] > 0 for r in ok) / len(ok), 3) if ok else None,
+        "llm_calls_by_agent_mean": {
+            a: round(sum(r["llm_calls_by_agent"].get(a, 0) for r in ok) / len(ok), 2)
+            for a in sorted({a for r in ok for a in r["llm_calls_by_agent"]})
+        },
         "prompt_tokens_mean": mean("prompt_tokens"),
         "thinking_tokens_mean": mean("thinking_tokens"),
         "output_tps_p50": p("output_tps", 50),
@@ -124,7 +132,9 @@ def main() -> int:
                 unreachable = unreachable + 1 if rec["fails"][:1] and rec["fails"][0].startswith("request failed") else 0
                 detail = "" if rec["passed"] else f"  ← {'; '.join(rec['fails'])}"
                 cost = f"${rec['cost_usd']:.4f}" if rec.get("cost_usd") is not None else "$?"
-                stats = f"  {rec['latency_s']:>5.1f}s {cost} calls={rec['llm_calls']}" if "llm_calls" in rec else ""
+                stats = (f"  {rec['latency_s']:>5.1f}s {cost} calls={rec['llm_calls']}"
+                         + (f" agents={','.join(rec['agents'])}" if rec["agents"] else "")
+                         + (" REVISED" if rec["revisions"] else "")) if "llm_calls" in rec else ""
                 print(f"  {case['id']:<20} run {i + 1}: {'PASS' if rec['passed'] else 'FAIL'}{stats}{detail}")
             rows.append((case["id"], passes))
             if unreachable >= MAX_CONSECUTIVE_UNREACHABLE:
@@ -144,6 +154,8 @@ def main() -> int:
     print(f"cost/request   p50=${summary['cost_p50_usd']}  p95=${summary['cost_p95_usd']}  total=${summary['cost_total_usd']}")
     print(f"per request    llm_calls={summary['llm_calls_mean']}  prompt_tokens={summary['prompt_tokens_mean']}  "
           f"thinking_tokens={summary['thinking_tokens_mean']}  output tok/s p50={summary['output_tps_p50']}")
+    if summary["llm_calls_by_agent_mean"]:
+        print(f"llm calls/agent {summary['llm_calls_by_agent_mean']}  critic revision rate={summary['revision_rate']:.0%}")
 
     if args.out and not aborted:
         out = Path(args.out)

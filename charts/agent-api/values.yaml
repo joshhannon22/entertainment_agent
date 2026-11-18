@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   repository: agent-api
-  tag: v3
+  tag: v4
   pullPolicy: IfNotPresent
 
 service:
@@ -12,7 +12,9 @@ service:
 config:
   MODEL: gemini-3.8-flash
   THINKING_LEVEL: low   # matches Phase 1's reasoning_effort=low; see watch_party/agent.py
-  ADK_MAX_LLM_CALLS: "6"
+  # Per invocation: the root run (router + critic, both passes) counts here; each specialist
+  # call is a nested run with its own budget of the same size.
+  ADK_MAX_LLM_CALLS: "10"
   GOOGLE_GENAI_USE_VERTEXAI: "FALSE"
   TOOLS_SERVER_URL: http://tools-server.watch-party.svc.cluster.local/mcp
 

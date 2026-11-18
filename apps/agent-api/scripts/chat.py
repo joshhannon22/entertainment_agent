@@ -48,9 +48,11 @@ def main() -> None:
             session_id = data["session_id"]
             console.print(Panel(Markdown(data["answer"] or f"_(no answer: {data.get('stop_reason', '?')})_"), title="agent", border_style="green"))
             tools = ", ".join(data["tool_calls"]) or "none"
+            agents = ", ".join(data.get("agents_called", [])) or "none"
+            revised = "  REVISED by critic" if data.get("revisions") else ""
             console.print(
-                f"[dim]pod={data['served_by']}  session={session_id[:8]}  tools={tools}  "
-                f"llm_calls={data['llm_calls']}  tokens in/out/think="
+                f"[dim]pod={data['served_by']}  session={session_id[:8]}  agents={agents}{revised}  tools={tools}  "
+                f"llm_calls={data.get('llm_calls_by_agent') or data['llm_calls']}  tokens in/out/think="
                 f"{data['prompt_tokens']}/{data['output_tokens']}/{data['thinking_tokens']}  "
                 f"{data['latency_s']}s[/]\n"
             )
