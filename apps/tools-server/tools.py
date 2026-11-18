@@ -12,9 +12,27 @@ import httpx
 
 # ── Shared ───────────────────────────────────────────────
 MAX_RESULTS = 5          # enough to give the model choices, few enough to stay cheap
-TIMEOUT_S = 10.0
 USER_AGENT = "WatchParty/0.1 (+https://github.com/joshhannon22/entertainment_agent)"
 HEADERS = {"User-Agent": USER_AGENT}   # CheapShark rejects generic UAs (curl/, python-httpx/) with a 400
+
+# ── Timeouts and retries (all HTTP goes through _get_json) ──
+# httpx timeouts are per attempt and per phase, not a total: Jikan took 20 s on a "10 s"
+# timeout (connect is retried per resolved address). So every tool call gets one total
+# deadline, and each attempt's timeout is cut to whatever time is left.
+# TOOL_DEADLINE_S must stay well under agent-api's 30 s MCP timeout, or the agent gives up
+# before our error dict arrives.
+TOOL_DEADLINE_S = 20.0
+TIMEOUT_S = 8.0               # one attempt, read/write/pool
+CONNECT_TIMEOUT_S = 3.0       # one attempt, connect: a dead host should fail fast
+MIN_ATTEMPT_S = 1.0           # don't start an attempt with less time than this left
+MAX_ATTEMPTS = 3
+BACKOFF_BASE_S = 0.5          # full jitter: sleep uniform(0, min(cap, base * 2**attempt))
+BACKOFF_CAP_S = 4.0
+RETRY_STATUSES = {429, 500, 502, 503, 504}   # transient. Other 4xx = our request is wrong; retrying won't help
+
+# One pooled client for the process: keep-alive + TLS reuse across calls, and one place for
+# tests to swap in a mock transport. httpx.Client is safe to share across the tool threads.
+_http = httpx.Client(headers=HEADERS)
 
 # ── TVMaze ───────────────────────────────────────────────
 TVMAZE_SEARCH_URL = "https://api.tvmaze.com/search/shows"
@@ -95,7 +113,7 @@ def _strip_html(text: str | None) -> str:
     return re.sub(r"<[^>]+>", "", text).strip()
 
 
-def _get_store_names() -> dict[str, str]:
+def _get_store_names(deadline: float | None = None) -> dict[str, str]:
     """storeID -> storeName, fetched once per process.
 
     On failure return {} and DON'T cache it, so the next call retries.
@@ -105,12 +123,12 @@ def _get_store_names() -> dict[str, str]:
     if _store_names is not None:
         return _store_names
 
+    stores, err = _get_json("CheapShark", CHEAPSHARK_STORES_URL, {}, "", deadline=deadline)
+    if err:
+        return {}
     try:
-        resp = httpx.get(CHEAPSHARK_STORES_URL, headers=HEADERS, timeout=TIMEOUT_S)
-        resp.raise_for_status()
-        stores = resp.json()
         names = {s["storeID"]: s["storeName"] for s in stores}
-    except (httpx.HTTPError, ValueError, KeyError, TypeError):
+    except (KeyError, TypeError):
         return {}
 
     _store_names = names
@@ -125,32 +143,78 @@ def _num(value, cast=float):
         return None
 
 
+def _retry_after_s(resp: httpx.Response) -> float | None:
+    """Seconds from a Retry-After header, or None (absent, or the rarer HTTP-date form)."""
+    try:
+        return max(0.0, float(resp.headers.get("Retry-After")))
+    except (TypeError, ValueError):
+        return None
+
+
 def _get_json(source: str, url: str, params: dict, fallback: str,
-              headers: dict | None = None) -> tuple[object, dict | None]:
+              headers: dict | None = None, deadline: float | None = None) -> tuple[object, dict | None]:
     """GET url and parse the JSON body. Returns (data, None) or (None, error_dict). Never raises.
 
-    The same error contract the first three tools write out by hand. `fallback` is the
+    The one place the error contract and retries live, for every tool. `fallback` is the
     next step for the model, appended to every error ("Answer without anime details.").
-    The retries step will add retry/backoff here, once, for every tool that uses it.
-    """
-    try:
-        resp = httpx.get(url, params=params, headers={**HEADERS, **(headers or {})}, timeout=TIMEOUT_S)
-        resp.raise_for_status()
-    except httpx.TimeoutException:
-        return None, {"error": f"{source} timed out. {fallback}"}
-    except httpx.HTTPStatusError as e:
-        status = e.response.status_code
-        print(f"[{source}] HTTP {status}: {e.response.text[:200]}")
-        if status == 429:
-            return None, {"error": f"{source} is rate limiting us. Don't call it again this turn. {fallback}"}
-        return None, {"error": f"{source} returned HTTP {status}. {fallback}"}
-    except httpx.RequestError as e:
-        return None, {"error": f"{source} is unreachable ({type(e).__name__}). {fallback}"}
 
-    try:
-        return resp.json(), None
-    except ValueError:
-        return None, {"error": f"{source} returned an unexpected (non-JSON) response. {fallback}"}
+    Retries timeouts, connection errors, 429 and 5xx, up to MAX_ATTEMPTS, with jittered
+    exponential backoff (or the server's Retry-After), all inside one total deadline
+    (`deadline`, a time.monotonic() value; default now + TOOL_DEADLINE_S). Pass the same
+    deadline to every call one tool makes, so the tool as a whole stays inside the budget.
+    Only safe because every call here is a GET: never retry a non-idempotent request blindly.
+    """
+    if deadline is None:
+        deadline = time.monotonic() + TOOL_DEADLINE_S
+    # Errors after retries say "don't call it again": we already retried, and a model that
+    # retries on top multiplies the load (retry amplification) and burns the turn's time.
+    give_up = f"Don't call it again this turn. {fallback}"
+    error = {"error": f"{source} didn't answer in time. {give_up}"}   # if no attempt fits
+
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        remaining = deadline - time.monotonic()
+        if remaining < MIN_ATTEMPT_S:
+            break
+        per_try = min(TIMEOUT_S, remaining)
+        timeout = httpx.Timeout(per_try, connect=min(CONNECT_TIMEOUT_S, per_try))
+        retry_after = None
+        try:
+            resp = _http.get(url, params=params, headers=headers, timeout=timeout)
+        except httpx.TimeoutException:   # subclass of RequestError, so it goes first
+            reason = "timeout"
+            error = {"error": f"{source} timed out. {give_up}"}
+        except httpx.RequestError as e:
+            reason = type(e).__name__
+            error = {"error": f"{source} is unreachable ({reason}). {give_up}"}
+        else:
+            status = resp.status_code
+            if resp.is_success:   # any 2xx: FreeToGame says "no results" with a 201
+                try:
+                    return resp.json(), None
+                except ValueError:   # e.g. an HTML maintenance page; retrying won't fix it
+                    return None, {"error": f"{source} returned an unexpected (non-JSON) response. {fallback}"}
+            print(f"[{source}] HTTP {status}: {resp.text[:200]}")
+            if status not in RETRY_STATUSES:
+                return None, {"error": f"{source} returned HTTP {status}. {fallback}"}
+            reason = f"HTTP {status}"
+            retry_after = _retry_after_s(resp)
+            if status == 429:
+                error = {"error": f"{source} is rate limiting us. {give_up}"}
+            else:
+                error = {"error": f"{source} returned HTTP {status}. {give_up}"}
+
+        if attempt == MAX_ATTEMPTS:
+            break
+        if retry_after is not None:
+            wait = retry_after
+        else:
+            wait = random.uniform(0, min(BACKOFF_CAP_S, BACKOFF_BASE_S * 2 ** attempt))
+        if time.monotonic() + wait + MIN_ATTEMPT_S > deadline:
+            break   # no room for another real attempt after the wait: fail now, not later
+        print(f"[{source}] attempt {attempt}/{MAX_ATTEMPTS} failed ({reason}), retrying in {wait:.1f}s")
+        time.sleep(wait)
+
+    return None, error
 
 
 # ── Tool: search_tv_shows ────────────────────────────────
@@ -171,24 +235,16 @@ def search_tv_shows(query: str) -> dict:
         query: A show title or part of one, e.g. 'Arcane' or 'Breaking Bad'. Not a genre,
             mood, or description.
     """
-    try:
-        resp = httpx.get(TVMAZE_SEARCH_URL, params={"q": query}, headers=HEADERS, timeout=TIMEOUT_S)
-        resp.raise_for_status()
-    except httpx.TimeoutException:
-        return {"error": "TVMaze timed out. Try again or use a different source."}
-    except httpx.HTTPStatusError as e:
-        return {"error": f"TVMaze returned HTTP {e.response.status_code}."}
-    except httpx.RequestError as e:
-        return {"error": f"TVMaze is unreachable ({type(e).__name__})."}
-
-    try:
-        data = resp.json()
-    except ValueError:  # json.JSONDecodeError is a subclass of ValueError
-        return {"error": "TVMaze returned an unexpected (non-JSON) response."}
+    data, err = _get_json("TVMaze", TVMAZE_SEARCH_URL, {"q": query}, "Answer without show details.")
+    if err:
+        return err
+    if not isinstance(data, list):
+        print(f"[tvmaze] unexpected payload: {str(data)[:200]}")
+        return {"error": "TVMaze returned an unexpected response. Answer without show details."}
 
     results = []
     for item in data[:MAX_RESULTS]:
-        show = item["show"]
+        show = item.get("show") or {}
         channel = show.get("webChannel") or show.get("network") or {}
         results.append({
             "name": show.get("name"),
@@ -233,21 +289,11 @@ def find_game_deals(title: str, max_price: float | None = None) -> dict:
     if max_price is not None:
         params["upperPrice"] = max_price
 
-    try:
-        resp = httpx.get(CHEAPSHARK_DEALS_URL, params=params, headers=HEADERS, timeout=TIMEOUT_S)
-        resp.raise_for_status()
-    except httpx.TimeoutException:
-        return {"error": "CheapShark timed out. Try again or answer without game prices."}
-    except httpx.HTTPStatusError as e:
-        print(f"[cheapshark] HTTP {e.response.status_code}: {e.response.text[:200]}")
-        return {"error": f"CheapShark returned HTTP {e.response.status_code}. Answer without game prices."}
-    except httpx.RequestError as e:
-        return {"error": f"CheapShark is unreachable ({type(e).__name__}). Answer without game prices."}
-
-    try:
-        data = resp.json()
-    except ValueError:
-        return {"error": "CheapShark returned an unexpected (non-JSON) response."}
+    deadline = time.monotonic() + TOOL_DEADLINE_S   # one budget for /deals + /stores together
+    data, err = _get_json("CheapShark", CHEAPSHARK_DEALS_URL, params, "Answer without game prices.",
+                          deadline=deadline)
+    if err:
+        return err
     if not isinstance(data, list):
         print(f"[cheapshark] unexpected payload: {str(data)[:200]}")
         return {"error": "CheapShark returned an unexpected response. Answer without game prices."}
@@ -262,7 +308,7 @@ def find_game_deals(title: str, max_price: float | None = None) -> dict:
         if best is None or price < _num(best["salePrice"]):
             cheapest[game_id] = deal
 
-    store_names = _get_store_names()
+    store_names = _get_store_names(deadline)
     deals = []
     for deal in list(cheapest.values())[:MAX_RESULTS]:
         store_id = deal.get("storeID")
@@ -305,21 +351,9 @@ def search_books(query: str) -> dict:
 
     params = {"q": query, "limit": MAX_RESULTS, "fields": OPENLIBRARY_FIELDS}  # fields= : the server trims for us
 
-    try:
-        resp = httpx.get(OPENLIBRARY_SEARCH_URL, params=params, headers=HEADERS, timeout=TIMEOUT_S)
-        resp.raise_for_status()
-    except httpx.TimeoutException:
-        return {"error": "Open Library timed out. Try again or answer without book details."}
-    except httpx.HTTPStatusError as e:
-        print(f"[openlibrary] HTTP {e.response.status_code}: {e.response.text[:200]}")
-        return {"error": f"Open Library returned HTTP {e.response.status_code}. Answer without book details."}
-    except httpx.RequestError as e:
-        return {"error": f"Open Library is unreachable ({type(e).__name__}). Answer without book details."}
-
-    try:
-        data = resp.json()
-    except ValueError:
-        return {"error": "Open Library returned an unexpected (non-JSON) response."}
+    data, err = _get_json("Open Library", OPENLIBRARY_SEARCH_URL, params, "Answer without book details.")
+    if err:
+        return err
     if not isinstance(data, dict):
         print(f"[openlibrary] unexpected payload: {str(data)[:200]}")
         return {"error": "Open Library returned an unexpected response. Answer without book details."}
@@ -524,12 +558,19 @@ def get_trivia(
     # Respect the 5 s rule ourselves instead of burning a call on response_code 5.
     # Per process only: with 2 tools-server replicas behind one egress IP, both could still
     # collide. A shared limiter (Redis) is the real fix; see "Only if curious".
-    with _opentdb_lock:
+    # The deadline starts before the queue: time spent waiting for the lock counts too.
+    deadline = time.monotonic() + TOOL_DEADLINE_S
+    fallback = "Make up no questions; say trivia is unavailable."
+    if not _opentdb_lock.acquire(timeout=TOOL_DEADLINE_S - MIN_ATTEMPT_S):
+        return {"error": f"Open Trivia DB is busy with other requests. {fallback}"}
+    try:
         wait = OPENTDB_MIN_INTERVAL_S - (time.monotonic() - _opentdb_last_call)
         if wait > 0:
             time.sleep(wait)
-        data, err = _get_json("Open Trivia DB", OPENTDB_URL, params, "Make up no questions; say trivia is unavailable.")
+        data, err = _get_json("Open Trivia DB", OPENTDB_URL, params, fallback, deadline=deadline)
         _opentdb_last_call = time.monotonic()
+    finally:
+        _opentdb_lock.release()
     if err:
         return err
     if not isinstance(data, dict):

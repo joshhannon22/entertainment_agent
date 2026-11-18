@@ -3,7 +3,7 @@ replicaCount: 2
 
 image:
   repository: tools-server
-  tag: v3
+  tag: v4
   pullPolicy: IfNotPresent
 
 # Created by hand (kubectl create secret), never by this chart. Only this Deployment references it.
